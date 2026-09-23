@@ -1,0 +1,11 @@
+{
+  "name": "wisenotes",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dependency-free Chrome extension for grounded lecture notes.",
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check background.js && node --check popup.js && node --check options.js && node --check offscreen.js && node --check yt-content.js"
+  }
+}

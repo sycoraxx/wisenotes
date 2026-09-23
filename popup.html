@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WiseNotes</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <img class="mark" src="assets/icons/icon-48.png" alt="">
+        <div>
+          <h1>WiseNotes</h1>
+          <p>Grounded notes for YouTube lectures</p>
+        </div>
+      </header>
+
+      <section class="visual-proof">
+        <strong>This is not transcript + AI.</strong>
+        <span>WiseNotes captures the actual video frames. Slides, equations, diagrams, tables, and code become visual evidence—not guesses from captions.</span>
+      </section>
+
+      <section class="card setup-card">
+        <div class="status-row">
+          <span class="status-dot" id="youtube-dot"></span>
+          <div>
+            <strong>YouTube lecture</strong>
+            <span id="youtube-status">Checking this tab…</span>
+          </div>
+        </div>
+        <div class="status-row">
+          <span class="status-dot" id="key-dot"></span>
+          <div>
+            <strong>Gemini key</strong>
+            <span id="key-status">Checking settings…</span>
+          </div>
+          <button class="link-button" id="settings-button" type="button">Settings</button>
+        </div>
+      </section>
+
+      <section class="card provider-card">
+        <strong>Use any capable AI</strong>
+        <p>WiseNotes prepares one universal prompt. When it is ready, copy and paste it into the LLM provider of your choice.</p>
+        <p class="recommendation"><span>Recommended</span> Claude works particularly well, including its free plan.</p>
+      </section>
+
+      <button class="primary full" id="start-button" type="button" disabled>Prepare universal prompt</button>
+      <p class="privacy-note">The transcript goes to a stable Gemini Flash model to choose visual moments; retrying after a service failure may send it again. Selected frames then go to Gemini for reading. WiseNotes never sends the final prompt to another provider.</p>
+
+      <section class="card progress-card hidden" id="progress-card" aria-live="polite">
+        <div class="progress-heading">
+          <strong id="progress-title">Working on your lecture</strong>
+          <span id="progress-percent">0%</span>
+        </div>
+        <div class="progress-track" id="progress-track"><div id="progress-bar"></div></div>
+        <p id="progress-message">Starting…</p>
+        <p class="error hidden" id="error-message"></p>
+        <div class="actions">
+          <button class="secondary hidden" id="resume-button" type="button">Resume</button>
+          <button class="secondary hidden" id="copy-button" type="button">Copy universal prompt</button>
+          <button class="danger hidden" id="cancel-button" type="button">Cancel</button>
+        </div>
+      </section>
+
+      <footer>
+        <button class="link-button" id="clear-data" type="button">Clear lecture data</button>
+        <button class="link-button" id="forget-key" type="button">Forget API key</button>
+      </footer>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

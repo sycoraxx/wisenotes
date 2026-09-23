@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WiseNotes settings</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">WiseNotes</p>
+      <h1>Settings</h1>
+      <p class="lede">Your key stays in this Chrome profile. WiseNotes has no server or telemetry.</p>
+
+      <section>
+        <label for="api-key">Gemini API key</label>
+        <div class="secret-row">
+          <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your Google AI Studio key">
+          <button id="toggle-key" class="secondary" type="button">Show</button>
+        </div>
+        <p class="hint">Create a key in <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer">Google AI Studio</a>. Free-tier data may be used by Google to improve its products.</p>
+      </section>
+
+      <section>
+        <label for="model">Frame-reading model</label>
+        <input id="model" type="text" spellcheck="false" value="gemini-3.5-flash-lite">
+        <p class="hint">Selected images use this efficient model. For semantic timestamp planning, WiseNotes tries the last successful explicit stable Flash model, then every available full Flash model, followed by stable Flash-Lite.</p>
+      </section>
+
+      <div class="actions">
+        <button id="save" class="primary" type="button">Save settings</button>
+        <button id="forget" class="secondary" type="button">Forget API key</button>
+      </div>
+      <p id="status" role="status"></p>
+
+      <aside>
+        <strong>Privacy boundary</strong>
+        <p>The complete timestamped transcript is sent to a compatible stable Gemini Flash model to choose visually important moments; retrying after a service failure may send it again. Selected lecture frames and nearby transcript context are then sent to the frame-reading model. WiseNotes builds the final universal prompt locally and never sends it to another LLM provider; you choose where to paste it.</p>
+      </aside>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>
