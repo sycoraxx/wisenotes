@@ -27,6 +27,16 @@ Frame-extraction requests are bounded and retried automatically, so a stalled or
 
 Requests go directly to `generativelanguage.googleapis.com`. Free-tier Gemini inputs and outputs may be used by Google to improve its products according to Google’s current pricing and data-use disclosures.
 
+## Google API Limited Use
+
+WiseNotes reaches Google only through the Gemini API, with the API key the user supplies, and only to provide the single purpose described above.
+
+**The use of information received from Google APIs will adhere to the Chrome Web Store User Data Policy, including the Limited Use requirements.**
+
+That policy is the [Chrome Web Store User Data Policy](https://developer.chrome.com/docs/webstore/program-policies/limited-use).
+
+Concretely: the transcript and frames are used only to build the user's prompt, they are not sold or transferred to anyone else, they are not used for advertising, and no human can read them on WiseNotes' behalf, because there is no WiseNotes server for them to be read from.
+
 ## Data in the universal prompt
 
 - The complete timestamped transcript.
