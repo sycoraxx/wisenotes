@@ -40,7 +40,7 @@ The official YouTube Data API is not a replacement for arbitrary public lectures
 
 WiseNotes requires desktop Chrome 116 or newer. Most users want the packaged zip; see [Releases](#releases).
 
-1. Download `wisenotes-<version>.zip` from [Releases](#releases) and unzip it, or clone this repository if you want to work on it.
+1. Download `wisenotes-<version>.zip` from [the latest release](https://github.com/sycoraxx/wisenotes/releases/latest) and unzip it, or clone this repository if you want to work on it.
 2. Open `chrome://extensions`.
 3. Enable **Developer mode**.
 4. Choose **Load unpacked** and select the unzipped folder, or this repository folder.
@@ -50,9 +50,11 @@ No package installation or build command is required for extension users.
 
 ## Releases
 
-Each version is published as `releases/wisenotes-<version>.zip`, containing only the files Chrome needs to run the extension. Tests, the hosted player page, and the uncompressed logo source are left out. `LICENSE` and `PRIVACY.md` are included, because the MIT terms require the licence notice to travel with copies and the Chrome Web Store requires an accessible privacy policy.
+Each version is published twice, and both are the same file: as a [GitHub Release](https://github.com/sycoraxx/wisenotes/releases) with the zip attached, and as `releases/wisenotes-<version>.zip` in this repository. The [latest release](https://github.com/sycoraxx/wisenotes/releases/latest) is the usual download.
 
-The zip is built by `npm run package` from an explicit file list, and the script fails if the manifest points at a file the package is missing, so an incomplete extension cannot be published by accident. Regenerate it whenever the version in `manifest.json` changes and commit the result, and attach the same file to the matching GitHub Release when you tag one.
+The zip contains only the files Chrome needs to run the extension. Tests, the hosted player page, and the uncompressed logo source are left out. `LICENSE` and `PRIVACY.md` are included, because the MIT terms require the licence notice to travel with copies and the Chrome Web Store requires an accessible privacy policy.
+
+The zip is built by `npm run package` from an explicit file list, and the script fails if the manifest points at a file the package is missing, so an incomplete extension cannot be published by accident. Regenerate it whenever the version in `manifest.json` changes, commit the result, and attach the same file to the matching GitHub Release when you tag one.
 
 Frame capture loads its player page from `sycoraxx.github.io/wisenotes`. If that page cannot be reached, WiseNotes captures the lecture tab directly instead.
 

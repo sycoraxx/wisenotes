@@ -23,7 +23,7 @@ npm run check
 
 Then complete the relevant scenarios in [test/manual.md](test/manual.md). Do not commit API keys, transcripts, captured lecture frames, prompts, or LLM conversations.
 
-When the version in `manifest.json` changes, run `npm run package` and commit the new `releases/wisenotes-<version>.zip`. That script packages an explicit file list, so review its output: it should list no `test/` or `docs/` files.
+When the version in `manifest.json` changes, run `npm run package`, commit the new `releases/wisenotes-<version>.zip`, and attach that same file to the matching GitHub Release. The script packages an explicit file list, so review its output: it should list no `test/` or `docs/` files.
 
 ## Selector updates
 
