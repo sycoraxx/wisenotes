@@ -25,7 +25,11 @@ Use a fresh Chrome profile when testing permissions and first-run behavior. Neve
 ## Semantic timestamp planning
 
 - Confirm WiseNotes lists the models exposed to the API key, rejects aliases and preview/specialized variants, and sends the complete timestamped transcript without images to an explicit stable Flash model.
+- With a new Gemini project, confirm catalog entries for legacy 2.x Flash models are ignored and never become the final misleading `404` attempt.
 - Confirm the popup names the Flash model actually selected for the lecture.
+- After one successful plan, make model discovery fail and confirm the cached successful model is used without calling the catalog.
+- With no cached model, make model discovery fail and confirm the current stable full-Flash ladder is attempted newest-first before the configured stable frame-reading model.
+- Stall model discovery and planning generation separately; confirm discovery stops after 20 seconds per attempt and generation after 120 seconds per attempt, with transient retries remaining bounded.
 - Simulate a `503` and confirm exponential retries occur before WiseNotes tries the next compatible Flash model.
 - Make the first four models fail and confirm WiseNotes continues to the fifth, then to stable Flash-Lite.
 - Simulate a planner `429` and confirm no second model is called, `Retry-After` is saved, and Resume retries planning.

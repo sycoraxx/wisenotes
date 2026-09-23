@@ -70,14 +70,14 @@ Only final winners consume image-model quota. The budget is `ceil(durationMinute
 
 | Stage | Input | Output | Failure behavior |
 |---|---|---|---|
-| Timestamp planning | Complete timestamped transcript | Bounded visual windows | Stable Flash models tried newest-first; `429` pauses; other failures allow Resume |
+| Timestamp planning | Complete timestamped transcript | Bounded visual windows | Known-good model first; 20s discovery and 120s generation bounds; `429` pauses |
 | Frame extraction | Up to 16 JPEGs, each paired with ±30s captions | Validated JSON visual evidence | 120s timeout, up to 3 transient retries, batch checkpointing |
 
-Planning discovers explicit stable `gemini-X.Y-flash` and `gemini-X.Y-flash-lite` models exposed to the user’s key. The last successful model is tried first. Aliases, previews, and specialized variants are rejected.
+Planning tries the last successful current-generation model before it depends on the catalog, then discovers explicit stable `gemini-X.Y-flash` and `gemini-X.Y-flash-lite` models exposed to the user’s key. Legacy 2.x candidates are excluded from automatic planning because Google limits their availability for new projects even when they appear in catalog results. On a cold start where discovery itself is unavailable, WiseNotes directly tries a current stable full-Flash ladder newest-first, followed by the configured stable Lite model. Aliases, previews, and specialized variants are rejected.
 
 Frame extraction uses the configured Lite model. Its schema preserves visible text, code, diagrams, equation order, pdflatex-compatible notation, confidence, and ambiguous glyphs. Both prompts delimit lecture material as untrusted data and explicitly forbid following instructions inside it.
 
-Known gap: planning requests do not yet have a timeout. Frame-extraction requests do.
+Catalog requests time out after 20 seconds. Planner generation and frame-extraction attempts time out after 120 seconds and retry only transient failures.
 
 ## Captions
 

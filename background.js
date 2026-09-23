@@ -23,7 +23,11 @@ import {
   takeGeminiBatch
 } from "./lib/gemini.js";
 import { buildSynthesisPrompt } from "./lib/prompt.js";
-import { AUTO_PLANNER_MODEL, inferFrameTriggers } from "./lib/planner.js";
+import {
+  AUTO_PLANNER_MODEL,
+  STABLE_PLANNER_FALLBACK_MODELS,
+  inferFrameTriggers
+} from "./lib/planner.js";
 import { JOB_STATES, assertTransition, publicSession } from "./lib/state.js";
 import { buildPlayerPageUrl, durationMatches, paceDelayMs } from "./lib/embed.js";
 import {
@@ -207,6 +211,7 @@ async function continueFromTranscript(sessionId, apiKey, signal) {
       durationSeconds: session.duration,
       model: AUTO_PLANNER_MODEL,
       preferredModel: session.preferredPlannerModel,
+      fallbackModels: [...STABLE_PLANNER_FALLBACK_MODELS, session.model, DEFAULT_MODEL],
       signal
     });
   } catch (error) {

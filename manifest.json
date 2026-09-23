@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "minimum_chrome_version": "116",
   "name": "WiseNotes",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Turn captioned YouTube lectures into a visually grounded LaTeX prompt for any capable LLM — wherever speech alone is lossy.",
   "permissions": [
     "activeTab",

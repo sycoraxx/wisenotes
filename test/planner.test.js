@@ -3,9 +3,12 @@ import assert from "node:assert/strict";
 import {
   buildFramePlanningPrompt,
   inferFrameTriggers,
+  isAutomaticPlannerModelId,
+  isStableFlashModelId,
   plannerMomentBudget,
   preferPreviouslySuccessfulModel,
   rankFlashModels,
+  STABLE_PLANNER_FALLBACK_MODELS,
   validateFramePlan
 } from "../lib/planner.js";
 
@@ -126,12 +129,40 @@ test("model discovery ranks explicit stable full Flash before Flash-Lite", () =>
     { baseModelId: "gemini-flash-latest", supportedGenerationMethods: methods },
     { baseModelId: "gemini-4-flash-preview", supportedGenerationMethods: methods },
     { baseModelId: "gemini-3.9-flash-live", supportedGenerationMethods: methods },
+    { baseModelId: "gemini-2.5-flash", supportedGenerationMethods: methods },
+    { baseModelId: "gemini-2.5-flash-lite", supportedGenerationMethods: methods },
     { baseModelId: "gemini-9-pro", supportedGenerationMethods: methods }
   ]), [
     "gemini-3.8-flash",
     "gemini-3.7-flash",
     "gemini-3.8-flash-lite"
   ]);
+});
+
+test("stable Flash IDs exclude moving aliases, previews, and specialized variants", () => {
+  assert.equal(isStableFlashModelId("gemini-3.8-flash"), true);
+  assert.equal(isStableFlashModelId("gemini-3.5-flash-lite"), true);
+  assert.equal(isStableFlashModelId("gemini-flash-latest"), false);
+  assert.equal(isStableFlashModelId("gemini-3.8-flash-preview"), false);
+  assert.equal(isStableFlashModelId("gemini-3.8-flash-live"), false);
+});
+
+test("automatic planning excludes legacy Flash models unavailable to new projects", () => {
+  assert.equal(isStableFlashModelId("gemini-2.5-flash-lite"), true);
+  assert.equal(isAutomaticPlannerModelId("gemini-2.5-flash-lite"), false);
+  assert.equal(isAutomaticPlannerModelId("gemini-3.5-flash-lite"), true);
+  assert.equal(isAutomaticPlannerModelId("gemini-3.8-flash"), true);
+});
+
+test("cold-start fallbacks prefer capable full Flash models before Flash-Lite", () => {
+  assert.deepEqual(STABLE_PLANNER_FALLBACK_MODELS.slice(0, 2), [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash"
+  ]);
+  assert.ok(STABLE_PLANNER_FALLBACK_MODELS.every(isStableFlashModelId));
+  const firstLite = STABLE_PLANNER_FALLBACK_MODELS.findIndex((model) => model.endsWith("-lite"));
+  assert.ok(firstLite > 0);
+  assert.ok(STABLE_PLANNER_FALLBACK_MODELS.slice(0, firstLite).every((model) => !model.endsWith("-lite")));
 });
 
 test("the last successful discovered model is attempted first", () => {
@@ -144,6 +175,98 @@ test("the last successful discovered model is attempted first", () => {
     "gemini-3.8-flash",
     "gemini-3.5-flash-lite"
   ]);
+});
+
+test("a known-good planner model bypasses a flaky model catalog", async () => {
+  let discoveryCalls = 0;
+  let generationCalls = 0;
+  const result = await inferFrameTriggers({
+    apiKey: "test-key",
+    transcript: [{ start: 10, text: "A diagram is introduced." }],
+    durationSeconds: 60,
+    preferredModel: "gemini-3.8-flash",
+    fetchImpl: async (_url, options) => {
+      if (options.method === "GET") {
+        discoveryCalls += 1;
+        return errorResponse(503);
+      }
+      generationCalls += 1;
+      return successfulResponse({
+        candidates: [{ content: { parts: [{ text: JSON.stringify({ moments: [] }) }] } }]
+      });
+    }
+  });
+  assert.equal(result.model, "gemini-3.8-flash");
+  assert.equal(discoveryCalls, 0);
+  assert.equal(generationCalls, 1);
+});
+
+test("a configured stable model keeps planning alive during a catalog outage", async () => {
+  let discoveryCalls = 0;
+  let fallbackCalls = 0;
+  const result = await inferFrameTriggers({
+    apiKey: "test-key",
+    transcript: [{ start: 10, text: "A derivation begins." }],
+    durationSeconds: 60,
+    fallbackModels: ["gemini-3.5-flash-lite"],
+    sleepImpl: async () => {},
+    fetchImpl: async (url, options) => {
+      if (options.method === "GET") {
+        discoveryCalls += 1;
+        return errorResponse(503);
+      }
+      assert.match(url, /gemini-3\.5-flash-lite:generateContent/);
+      fallbackCalls += 1;
+      return successfulResponse({
+        candidates: [{ content: { parts: [{ text: JSON.stringify({ moments: [] }) }] } }]
+      });
+    }
+  });
+  assert.equal(discoveryCalls, 4);
+  assert.equal(fallbackCalls, 1);
+  assert.equal(result.model, "gemini-3.5-flash-lite");
+});
+
+test("a fresh install uses the built-in full-Flash ladder during a catalog outage", async () => {
+  let discoveryCalls = 0;
+  let generationCalls = 0;
+  const result = await inferFrameTriggers({
+    apiKey: "brand-new-key",
+    transcript: [{ start: 10, text: "The lecturer develops the proof on the board." }],
+    durationSeconds: 60,
+    sleepImpl: async () => {},
+    fetchImpl: async (url, options) => {
+      if (options.method === "GET") {
+        discoveryCalls += 1;
+        return errorResponse(503);
+      }
+      assert.match(url, /gemini-3\.8-flash:generateContent/);
+      generationCalls += 1;
+      return successfulResponse({
+        candidates: [{ content: { parts: [{ text: JSON.stringify({ moments: [] }) }] } }]
+      });
+    }
+  });
+  assert.equal(discoveryCalls, 4);
+  assert.equal(generationCalls, 1);
+  assert.equal(result.model, "gemini-3.8-flash");
+});
+
+test("planner attempts are bounded and transient timeouts are retried", async () => {
+  let generationCalls = 0;
+  await assert.rejects(() => inferFrameTriggers({
+    apiKey: "test-key",
+    transcript: [{ start: 10, text: "A diagram is introduced." }],
+    durationSeconds: 60,
+    model: "gemini-3.8-flash",
+    requestTimeoutMs: 2,
+    sleepImpl: async () => {},
+    fetchImpl: async () => {
+      generationCalls += 1;
+      return new Promise(() => {});
+    }
+  }), (error) => error.status === 408 && /after 1 model attempt/i.test(error.message));
+  assert.equal(generationCalls, 4);
 });
 
 test("a repeatedly unavailable model falls through to the next accessible Flash model", async () => {

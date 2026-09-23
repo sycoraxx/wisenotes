@@ -106,7 +106,7 @@ The official YouTube Data API cannot download captions from arbitrary public lec
 - Some videos forbid embedding. WiseNotes then falls back to capturing the original watch tab.
 - The hosted embed reduced pre-rolls in testing; it does not block ads or guarantee an ad-free run.
 - If YouTube exposes a **Skip Ad** control, the current beta clicks it automatically. The repository documents this because that automation may conflict with YouTube’s terms and may carry account risk.
-- Frame extraction has bounded retries; timestamp planning does not yet have a request timeout and can stall during a provider outage.
+- Timestamp planning tries the last known-good current-generation Flash model before consulting Gemini’s model catalog. Automatic planning ignores legacy 2.x candidates that Google restricts for new projects. On a fresh install, a catalog outage falls through a current stable full-Flash ladder before the configured Flash-Lite model. Every attempt is bounded; persistent provider outages still require **Resume**.
 - WiseNotes prepares the evidence and prompt. It does not compile or download the final `.tex` file.
 
 ## Development
