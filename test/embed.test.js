@@ -182,3 +182,15 @@ test("the content script runs in every frame and only the player frame answers",
     "nested frames must not answer capture commands"
   );
 });
+
+// Narrowest permissions. Reading a tab's url or title needs the "tabs" permission or a host
+// permission for that tab, and WiseNotes never reads them for the player page: it identifies that
+// tab by load status instead. Adding "tabs" back would buy the "read your browsing history" warning
+// and nothing else, so this test pins the exact set. Update it deliberately, not by accident.
+test("the manifest requests only the permissions the extension actually uses", () => {
+  assert.deepEqual(
+    [...manifest.permissions].sort(),
+    ["activeTab", "clipboardWrite", "offscreen", "scripting", "storage", "tabCapture"]
+  );
+  assert.ok(!JSON.stringify(manifest).includes('"tabs"'));
+});

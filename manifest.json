@@ -10,8 +10,7 @@
     "offscreen",
     "scripting",
     "storage",
-    "tabCapture",
-    "tabs"
+    "tabCapture"
   ],
   "host_permissions": [
     "https://www.youtube.com/*",

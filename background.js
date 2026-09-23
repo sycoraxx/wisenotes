@@ -25,7 +25,7 @@ import {
 import { buildSynthesisPrompt } from "./lib/prompt.js";
 import { AUTO_PLANNER_MODEL, inferFrameTriggers } from "./lib/planner.js";
 import { JOB_STATES, assertTransition, publicSession } from "./lib/state.js";
-import { buildPlayerPageUrl, durationMatches, isPlayerPageUrl, paceDelayMs } from "./lib/embed.js";
+import { buildPlayerPageUrl, durationMatches, paceDelayMs } from "./lib/embed.js";
 import {
   captionJson3Url,
   dedupeSegments,
@@ -862,14 +862,18 @@ function needsInvocation(error) {
   return /not been invoked|activeTab|cannot be captured|not allowed/i.test(String(error?.message || error));
 }
 
+// Readiness is taken from the load status rather than the tab's URL on purpose. Reading a tab's url
+// or title needs either the "tabs" permission or a host permission for that tab, and WiseNotes
+// deliberately asks for neither on the player page. tab.status is available without any permission,
+// and PREPARE_EMBED still does the real waiting and reports a useful error if no player appears.
 async function waitForPlayerTab(tabId, timeoutMs = CAPTURE_TAB_PREPARE_TIMEOUT_MS) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
-    if (tab && isPlayerPageUrl(tab.url)) return tab;
+    if (tab?.status === "complete") return tab;
     await sleep(250);
   }
-  throw new Error("the capture tab did not load the WiseNotes player page");
+  throw new Error("the capture tab did not finish loading the WiseNotes player page");
 }
 
 // Proves the capture tab really produces usable lecture pixels before the run commits to it.
