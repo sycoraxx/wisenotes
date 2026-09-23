@@ -7,13 +7,31 @@
     <link rel="stylesheet" href="options.css">
   </head>
   <body>
-    <main>
-      <p class="eyebrow">WiseNotes</p>
-      <h1>Settings</h1>
-      <p class="lede">Your key stays in this Chrome profile. WiseNotes has no server or telemetry.</p>
+    <div class="ambient" aria-hidden="true">
+      <span class="orb orb-one"></span>
+      <span class="orb orb-two"></span>
+      <span class="orb orb-three"></span>
+    </div>
 
-      <section>
-        <label for="api-key">Gemini API key</label>
+    <main>
+      <header>
+        <div class="brand-lockup">
+          <div class="mark-wrap"><img src="assets/icons/icon-48.png" alt=""></div>
+          <span>WiseNotes</span>
+        </div>
+        <p class="eyebrow">Preferences</p>
+        <h1>Make it yours.</h1>
+        <p class="lede">Private, local settings for your visual lecture workflow.</p>
+      </header>
+
+      <section class="glass-card">
+        <div class="section-heading">
+          <div>
+            <span class="section-kicker">Connection</span>
+            <label for="api-key">Gemini API key</label>
+          </div>
+          <span class="private-pill">Stored locally</span>
+        </div>
         <div class="secret-row">
           <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your Google AI Studio key">
           <button id="toggle-key" class="secondary" type="button">Show</button>
@@ -21,8 +39,14 @@
         <p class="hint">Create a key in <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer">Google AI Studio</a>. Free-tier data may be used by Google to improve its products.</p>
       </section>
 
-      <section>
-        <label for="model">Frame-reading model</label>
+      <section class="glass-card">
+        <div class="section-heading">
+          <div>
+            <span class="section-kicker">Visual intelligence</span>
+            <label for="model">Frame-reading model</label>
+          </div>
+          <span class="model-glyph" aria-hidden="true">◫</span>
+        </div>
         <input id="model" type="text" spellcheck="false" value="gemini-3.5-flash-lite">
         <p class="hint">Selected images use this efficient model. For semantic timestamp planning, WiseNotes tries the last successful explicit stable Flash model, then every available full Flash model, followed by stable Flash-Lite.</p>
       </section>
@@ -33,9 +57,12 @@
       </div>
       <p id="status" role="status"></p>
 
-      <aside>
+      <aside class="glass-card privacy-card">
+        <span class="privacy-symbol" aria-hidden="true">⌁</span>
+        <div>
         <strong>Privacy boundary</strong>
         <p>The complete timestamped transcript is sent to a compatible stable Gemini Flash model to choose visually important moments; retrying after a service failure may send it again. Selected lecture frames and nearby transcript context are then sent to the frame-reading model. WiseNotes builds the final universal prompt locally and never sends it to another LLM provider; you choose where to paste it.</p>
+        </div>
       </aside>
     </main>
     <script type="module" src="options.js"></script>

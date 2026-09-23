@@ -7,21 +7,42 @@
     <link rel="stylesheet" href="popup.css">
   </head>
   <body>
-    <main>
-      <header>
-        <img class="mark" src="assets/icons/icon-48.png" alt="">
-        <div>
-          <h1>WiseNotes</h1>
-          <p>Grounded notes for YouTube lectures</p>
+    <div class="ambient" aria-hidden="true">
+      <span class="orb orb-one"></span>
+      <span class="orb orb-two"></span>
+      <span class="orb orb-three"></span>
+    </div>
+
+    <main class="glass-shell">
+      <header class="brand-header">
+        <div class="mark-wrap">
+          <img class="mark" src="assets/icons/icon-48.png" alt="">
+        </div>
+        <div class="brand-copy">
+          <div class="brand-line">
+            <h1>WiseNotes</h1>
+            <span class="beta-pill">Beta</span>
+          </div>
+          <p>Visual lecture notes, grounded in evidence</p>
         </div>
       </header>
 
       <section class="visual-proof">
-        <strong>This is not transcript + AI.</strong>
-        <span>WiseNotes captures the actual video frames. Slides, equations, diagrams, tables, and code become visual evidence—not guesses from captions.</span>
+        <span class="proof-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path d="M4.5 7.5A2.5 2.5 0 0 1 7 5h10a2.5 2.5 0 0 1 2.5 2.5v7A2.5 2.5 0 0 1 17 17H7a2.5 2.5 0 0 1-2.5-2.5z"/>
+            <path d="m9.5 9 5 3-5 3z"/>
+            <path d="M8 20h8"/>
+          </svg>
+        </span>
+        <div>
+          <strong>More than transcript + AI</strong>
+          <span>Actual lecture frames ground every equation, diagram, table, slide, and line of code.</span>
+        </div>
       </section>
 
       <section class="card setup-card">
+        <div class="card-label">Ready check</div>
         <div class="status-row">
           <span class="status-dot" id="youtube-dot"></span>
           <div>
@@ -40,13 +61,16 @@
       </section>
 
       <section class="card provider-card">
-        <strong>Use any capable AI</strong>
+        <div class="provider-heading">
+          <strong>Use any capable AI</strong>
+          <span class="provider-symbol" aria-hidden="true">↗</span>
+        </div>
         <p>WiseNotes prepares one universal prompt. When it is ready, copy and paste it into the LLM provider of your choice.</p>
         <p class="recommendation"><span>Recommended</span> Claude works particularly well, including its free plan.</p>
       </section>
 
       <button class="primary full" id="start-button" type="button" disabled>Prepare universal prompt</button>
-      <p class="privacy-note">The transcript goes to a stable Gemini Flash model to choose visual moments; retrying after a service failure may send it again. Selected frames then go to Gemini for reading. WiseNotes never sends the final prompt to another provider.</p>
+      <p class="privacy-note"><span aria-hidden="true">⌁</span> Your key and lecture session stay in this Chrome profile. Only the transcript and selected frames are sent to Gemini.</p>
 
       <section class="card progress-card hidden" id="progress-card" aria-live="polite">
         <div class="progress-heading">
@@ -65,6 +89,7 @@
 
       <footer>
         <button class="link-button" id="clear-data" type="button">Clear lecture data</button>
+        <span class="footer-dot" aria-hidden="true"></span>
         <button class="link-button" id="forget-key" type="button">Forget API key</button>
       </footer>
     </main>
