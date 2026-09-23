@@ -1,54 +1,55 @@
-# WiseNotes privacy notes
+# WiseNotes privacy
 
-WiseNotes has no backend and collects no telemetry. Data moves only between the user’s browser and the AI services the user explicitly configures.
+WiseNotes has no application backend, accounts, analytics, or telemetry. It communicates directly with YouTube and Gemini, loads one static capture page from GitHub Pages, and copies the final prompt only when the user asks.
 
-## The hosted player page
+## Data flow
 
-Frame capture opens the lecture in an embedded player on a small static page published from this repository at `sycoraxx.github.io/wisenotes/player.html`. YouTube refuses to play an embedded video unless the request carries a referrer naming a real website, and an extension cannot be one, so that page cannot be bundled inside the extension itself.
+| Data | Destination | Purpose | Retention by WiseNotes |
+|---|---|---|---|
+| Gemini API key and model preference | Chrome local extension storage | Authenticate requests | Until **Forget API key** |
+| Complete timestamped transcript | Gemini | Select likely visual moments | Stored in the recoverable local session |
+| Selected JPEG frames + nearby captions | Gemini | Read equations, code, tables, diagrams, and visible text | JPEGs deleted after successful extraction |
+| Textual visual extractions | Local IndexedDB | Build and recover the final prompt | Until **Clear lecture data** |
+| Universal synthesis prompt | Local IndexedDB and clipboard | Let the user choose a final LLM | Until **Clear lecture data**; clipboard is user-triggered |
+| YouTube video ID | GitHub Pages request | Load the static capture page | Not stored or processed by WiseNotes |
 
-The page is static HTML: it loads no scripts from anywhere else, collects nothing, stores nothing, and sends nothing anywhere. Because it is fetched over HTTP, GitHub’s Pages infrastructure sees the request in the same way it would see any visit to that page, and the request carries only the YouTube video id. If the page cannot be reached, WiseNotes captures the user’s own watch tab instead and makes no such request.
+Candidate scout frames remain local. Gemini receives only the frames that survive local ranking.
 
-## Data stored locally
+## Gemini
 
-- Gemini API key and selected model ID in Chrome local extension storage.
-- Recoverable lecture sessions in IndexedDB: video metadata, transcript, progress, textual Gemini extractions, and the prepared universal prompt.
-- Selected JPEG frames only until Gemini has processed them successfully. They are then removed from the session.
+The transcript is sent once per planning attempt. Resuming after a planning failure sends it again.
 
-The user can remove sessions with **Clear lecture data** and remove the API key with **Forget API key**.
+Frame extraction is retried only for transient failures. A stalled or transient request may therefore send the same selected frames and nearby captions up to three times. Rate limits and permanent client errors are not retried automatically.
 
-## Data sent to Gemini
+Requests go directly to `generativelanguage.googleapis.com` using the key supplied by the user. Google states that free-tier inputs and outputs may be used to improve its products; users should review Google’s current Gemini pricing and data-use terms before processing sensitive material.
 
-- The complete timestamped transcript, once per planning attempt, so an explicit stable Gemini Flash or Flash-Lite model available to the user's key can infer visually important capture moments. If planning must be resumed after a service failure, the request is sent again.
-- Locally selected lecture frames, never the complete metadata-only scout set.
-- Timestamped transcript excerpts within 30 seconds of every selected frame.
-- Instructions to select visual timestamps and to extract visible text, equations, code, tables, and diagrams as structured JSON.
+## Hosted capture page
 
-Frame-extraction requests are bounded and retried automatically, so a stalled or transiently failing request may send the same frames and transcript excerpts more than once, up to three attempts. Rate limits and permanent client errors are not retried.
+YouTube requires an HTTP(S) referrer for embedded playback, which an extension page cannot provide. WiseNotes therefore opens `sycoraxx.github.io/wisenotes/player.html`.
 
-Requests go directly to `generativelanguage.googleapis.com`. Free-tier Gemini inputs and outputs may be used by Google to improve its products according to Google’s current pricing and data-use disclosures.
-
-## Google API Limited Use
-
-WiseNotes reaches Google only through the Gemini API, with the API key the user supplies, and only to provide the single purpose described above.
-
-**The use of information received from Google APIs will adhere to the Chrome Web Store User Data Policy, including the Limited Use requirements.**
-
-That policy is the [Chrome Web Store User Data Policy](https://developer.chrome.com/docs/webstore/program-policies/limited-use).
-
-Concretely: the transcript and frames are used only to build the user's prompt, they are not sold or transferred to anyone else, they are not used for advertising, and no human can read them on WiseNotes' behalf, because there is no WiseNotes server for them to be read from.
-
-## Data in the universal prompt
-
-- The complete timestamped transcript.
-- Textual visual extractions produced from the selected frames.
-- Instructions for producing one complete LaTeX document.
-
-WiseNotes stores this prompt locally and copies it only after the user presses **Copy universal prompt**. The extension does not access any LLM provider site. A provider receives the material only when the user chooses that provider, pastes the prompt, and submits it.
+The page is static, contains no analytics or storage, validates the 11-character YouTube video ID, and embeds only `youtube-nocookie.com`. GitHub’s infrastructure receives the normal page request, including that video ID. If the page is unavailable, WiseNotes falls back to capturing the original watch tab and makes no GitHub Pages request.
 
 ## Tab capture
 
-Chrome grants WiseNotes a media stream of the selected YouTube tab after the user starts a job. WiseNotes crops each capture to the on-page video element before storing or processing it. It does not retain whole-tab screenshots. If primary capture returns a blank image, a whole-tab screenshot may be taken as a fallback, but it is cropped immediately in the offscreen document and only the video crop is returned to the pipeline.
+After the user starts a job, Chrome provides a media stream for the selected YouTube tab. WiseNotes crops every capture to the video element before returning it to the pipeline. A blank-stream fallback may momentarily capture the visible tab, but it is cropped inside the offscreen document; the whole-tab image is not persisted.
 
-## No hidden collection
+## Final LLM
 
-WiseNotes does not collect account credentials, browsing history, LLM responses, analytics, crash reports, advertising identifiers, or payment information.
+WiseNotes does not access Claude, ChatGPT, Gemini’s chat interface, or another LLM website. It stores the universal prompt locally and copies it only after **Copy universal prompt** is pressed. The chosen provider receives it only after the user pastes and submits it.
+
+## Google API Limited Use
+
+WiseNotes uses information received from Google APIs only to create the user-requested lecture prompt.
+
+**The use of information received from Google APIs will adhere to the Chrome Web Store User Data Policy, including the Limited Use requirements.**
+
+See the [Chrome Web Store User Data Policy](https://developer.chrome.com/docs/webstore/program-policies/limited-use).
+
+WiseNotes does not sell lecture data, use it for advertising, or expose it to a WiseNotes operator. There is no WiseNotes server on which a human could inspect it.
+
+## User controls
+
+- **Clear lecture data** removes saved sessions, transcripts, frame extractions, and prompts.
+- **Forget API key** removes the Gemini key without deleting lecture sessions.
+
+WiseNotes does not collect account passwords, browsing history, LLM responses, crash reports, advertising identifiers, or payment information.

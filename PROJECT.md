@@ -1,80 +1,114 @@
-# WiseNotes public beta architecture
+# WiseNotes architecture
 
-## Product invariant
+This document explains the decisions behind the public beta. Start with the [README](README.md) if you only want to install or use WiseNotes.
 
-WiseNotes is a multimodal lecture-note tool. It must never degrade silently into transcript summarization.
+## The invariant
 
-- Captured video frames are authoritative for equations, notation, diagrams, tables, slide text, and code.
-- The transcript supplies narration, order, and timing.
-- When the two conflict, visual evidence wins.
-- If frame capture or frame extraction cannot run, the job fails visibly rather than producing transcript-only notes.
+WiseNotes is multimodal or it stops.
 
-## Target use cases
+- Frames govern equations, notation, diagrams, tables, slides, and code.
+- Captions govern narration, order, and timing.
+- Conflicts resolve in favor of visual evidence.
+- Failed visual capture or extraction must never quietly become transcript-only notes.
 
-The scope rule is: **WiseNotes is for sessions where the content is on screen rather than in the narration**, so speech is lossy and a transcript provably loses it. Any such session qualifies. Two formats are the acceptance-critical reference cases, and they are what the pipeline is tuned and tested for:
+The acceptance-critical formats are derivation-heavy STEM and live coding. Optimizing a talking-head video is never worth losing fidelity on a crowded board or changing terminal.
 
-- **Derivation-heavy STEM**: chalkboard work, digital ink and tablet handwriting, dense notation, multi-step derivations, and worked examples.
-- **Live coding**: code typed, refactored, and debugged on screen, together with terminal, build, and test output.
-
-Comparable material follows the same rule: lab walkthroughs, whiteboard architecture and systems-design sessions, statistics and data-modeling work, and hardware or circuit diagrams.
-
-Outside this scope the pipeline still runs, but the visual stage adds little. For talking-head, discussion, history, and slide-only lectures the transcript already carries the content, and a plain transcript summariser is the better tool. A change that trades fidelity in the reference formats for convenience elsewhere is the wrong trade.
-
-## Runtime flow
+## Pipeline at a glance
 
 ```text
-Popup user gesture
-  -> MV3 service worker
-     -> YouTube content script: transcript, playback snapshot, seek control
-     -> resilient stable Gemini Flash/Flash-Lite chain: semantic visual-moment planning from the full transcript
-     -> dedicated capture tab: hosted player page framing the embed, plus seek control
-        (highest offered quality pinned; the embed serves no pre-roll, so non-Premium users are not stalled)
-     -> Chrome tabCapture stream
-        -> offscreen document: crop, local dHash regions, edge map, sharpness, blank detection
-     -> metadata-only local scouts: accumulation/reset/scroll/camera segmentation and peak ranking
-     -> full-quality recapture of winners, blur recovery, deduplication, and sparse frame budget
-     -> Gemini Flash-Lite: frame-level structured visual extraction
-     -> synthesis prompt: full transcript + timestamped visual evidence
-     -> local universal prompt, exposed through an explicit Copy action
-     -> user chooses an LLM provider, pastes, reviews, and sends
+Popup
+  └─ service worker
+      ├─ snapshot playback + fetch captions
+      ├─ Gemini Flash planner → semantic visual windows
+      ├─ capture tab → YouTube embed → tabCapture stream
+      ├─ offscreen analysis → hashes, edges, blur, scene boundaries
+      ├─ peak selection → full-resolution recapture of winners
+      ├─ Gemini Flash-Lite → structured visual evidence
+      ├─ local prompt builder → transcript + evidence
+      └─ explicit Copy action → user-selected LLM
 ```
 
-Frames are captured from a dedicated capture tab that plays the lecture in an embedded player, because an embedded player does not serve the pre-roll the watch page serves. Measured in one signed-out browser on the same video, the watch page served a 15-second pre-roll and the embed served none. Users without Premium are therefore not stalled mid-capture. The user's own watch tab supplies the transcript and the playback snapshot and is never seeked; it is only paused and muted for the duration of the capture and restored afterwards.
+No LLM provider page is opened, inspected, or automated.
 
-YouTube plays an embed only when the request carries a `Referer` naming a real http(s), non-YouTube origin, because the player reads what it calls the embedder identity out of that header. A Chrome extension cannot be such an origin, and every alternative shape was tested against YouTube's own error codes: a top-level embed URL sends no referrer (Error 153), an embed inside a `chrome-extension://` page also sends none, even with `referrerpolicy="origin"` (Error 153), and an embed inside a youtube.com page is a denied embedder (Error 152). The capture tab therefore opens `docs/player.html`, a static page published by GitHub Pages from this repository. `yt-content.js` is declared with `all_frames` so it runs inside the framed player and keeps full seek, ad detection, ad skipping, and duration control; nested frames are ignored so they cannot answer in the player's place. That tab is recognised by load status rather than by URL, because reading a tab's URL would require the `tabs` permission that WiseNotes does not ask for.
+## Capture path
 
-Chrome only permits tab capture for a tab the user has invoked the extension on. The watch tab carries that grant automatically, but the player tab does not, so WiseNotes asks the user to click the WiseNotes toolbar icon once on that tab. Because the popup is closed by then, the request is carried by a red `1` badge and a tooltip on the toolbar icon itself, and the window is brought forward, rather than by a message in a popup nobody has open. That wait is bounded; if the grant never arrives, or the embed player cannot be used at all, WiseNotes falls back to capturing the watch page directly. In that fallback mode it temporarily requests the highest exposed quality and enables Theater mode, then restores the prior quality preference and layout.
+### Why a hosted player exists
 
-Every capture is cropped to the current video-element bounds, including the visible-tab fallback, so recommendations, comments, and browser chrome are not persisted. WiseNotes never draws YouTube's media element to a canvas.
+YouTube embeds require an HTTP(S) referrer that identifies the embedder. Top-level embed URLs, extension pages, and YouTube-hosted wrappers failed with player errors during testing. WiseNotes therefore opens [`docs/player.html`](docs/player.html), published through GitHub Pages, which contains only a validated YouTube video ID and a `youtube-nocookie.com` iframe.
 
-## Job persistence
+The YouTube content script runs in all frames but responds only from the actual player frame. The static wrapper is not granted extension host access.
 
-IndexedDB stores sessions by UUID. A session checkpoints after transcript extraction, local capture, and every Gemini batch. Raw JPEG frames remain available while Gemini work is incomplete and are removed immediately after every selected frame has been extracted successfully.
+### Permission handshake
 
-The service worker maintains an in-memory cancellation controller while active. If Chrome terminates the worker, the next status read marks the stale job as interrupted. Gemini-stage jobs can resume from the first unfinished frame; capture-stage jobs must restart because the tab stream and unsaved candidates no longer exist.
+Chrome grants tab capture only after the extension is invoked on that tab. The watch tab already has this grant; a newly opened capture tab does not. WiseNotes therefore:
 
-## External interfaces
+1. activates the capture tab;
+2. shows a red `1` badge and permission tooltip;
+3. waits up to one minute for a toolbar click;
+4. falls back to the watch tab if permission or embed playback fails.
 
-YouTube’s caption-player response and transcript panel are not stable public APIs. Their integrations live behind content-script message boundaries so selectors and compatibility fallbacks can be updated independently.
+The watch-tab fallback requests the highest exposed quality and Theater mode, then restores the previous quality, layout, playback state, rate, volume, mute state, timestamp, and scroll position.
 
-WiseNotes queries Gemini's model catalog with the user's API key and accepts only explicit stable full Flash and Flash-Lite text models. The last model that completed planning is tried first, followed by every discovered full Flash model from newest to oldest and then every stable Flash-Lite model. The selected model receives the complete timestamped transcript once and returns a bounded, validated list of likely visual windows. Transient failures use exponential backoff and the next compatible model. Project-wide rate limits honor `Retry-After`; if every candidate is temporarily unavailable, WiseNotes checkpoints the transcript and offers Resume instead of silently switching to a dense local cue plan.
+Every screenshot path is cropped to the current video-element bounds before data returns to the service worker. Recommendations, comments, and browser chrome are not persisted.
 
-Every external request carries a bound. Gemini frame-extraction attempts time out after 120 seconds and are retried up to three times with exponential backoff before an error is surfaced and Resume is offered. A timeout both aborts the request and races the await, because aborting alone would not bound a request that ignores its signal. Rate limits and permanent client errors are never retried, so a project-wide throttle still pauses cleanly. The planning stage is not bounded this way yet, so a stalled planning request can wait indefinitely. The caption endpoint is not retried on a rate limit either, and never advises an immediate reload.
+## Finding the fullest frame
 
-Every planned window is locally scouted at bounded early, growing, late, and peak points. The offscreen document returns compact visual metadata rather than a JPEG during this pass: whole-frame and 3×3 regional dHashes, a 16×9 edge-density map, sharpness, exposure, occupied area, and information score. Regional change separates camera/scene transitions from localized lecturer or facecam motion; shifted edge maps detect vertical code/canvas scrolling; edge-mass loss detects erasure. Peak-state reduction preserves the most informative state in each stable segment and keeps the pre-reset/pre-scroll state when later pixels cannot contain it. Only winners are recaptured as JPEGs and persisted.
+Semantic timing narrows the search; pixels make the final decision.
 
-Gemini Flash-Lite then receives batches of at most 16 selected frames. Each image is immediately preceded by its own ±30-second transcript window, preventing overlapping contexts from being associated only with the first image. Equations are returned as ordered structured records containing pdflatex-compatible notation, a literal visible reading, derivation role, confidence, ambiguity tokens, and frame-level equation context. Both outputs are constrained and validated as JSON before entering the rest of the pipeline.
+1. The planner receives the complete transcript and returns at most 8–32 high-value visual windows.
+2. A 30-second coverage sweep protects against missed or indirect transcript cues.
+3. Incremental windows are scouted at early, growing, late, and pre-transition points.
+4. Metadata-only scouts return a global dHash, 3×3 regional hashes, a 16×9 edge grid, sharpness, exposure, occupied area, and information density.
+5. Regional change distinguishes a moving lecturer or facecam from a camera/scene transition. Shifted edge maps detect scrolling; edge-mass loss detects erasure.
+6. Each stable segment keeps its strongest information peak. Pre-scroll and pre-erasure states survive when a later frame cannot contain them.
+7. Winners are recaptured as JPEGs. Blurry winners probe ±1.25 seconds and accept only sharper same-scene replacements.
+8. Final deduplication balances visual novelty, trigger relevance, sharpness, information, and temporal coverage.
+
+Only final winners consume image-model quota. The budget is `ceil(durationMinutes × 0.6)` with a minimum of one and no ceiling.
+
+## Gemini boundaries
+
+| Stage | Input | Output | Failure behavior |
+|---|---|---|---|
+| Timestamp planning | Complete timestamped transcript | Bounded visual windows | Stable Flash models tried newest-first; `429` pauses; other failures allow Resume |
+| Frame extraction | Up to 16 JPEGs, each paired with ±30s captions | Validated JSON visual evidence | 120s timeout, up to 3 transient retries, batch checkpointing |
+
+Planning discovers explicit stable `gemini-X.Y-flash` and `gemini-X.Y-flash-lite` models exposed to the user’s key. The last successful model is tried first. Aliases, previews, and specialized variants are rejected.
+
+Frame extraction uses the configured Lite model. Its schema preserves visible text, code, diagrams, equation order, pdflatex-compatible notation, confidence, and ambiguous glyphs. Both prompts delimit lecture material as untrusted data and explicitly forbid following instructions inside it.
+
+Known gap: planning requests do not yet have a timeout. Frame-extraction requests do.
+
+## Captions
+
+Selection order is human English → automatic English → translated English. Player-response metadata from live and initial responses is merged before choosing a track. Empty or malformed YouTube responses receive one bounded retry; `429` never triggers an immediate retry. The transcript panel is the compatibility fallback when appropriate.
+
+These are YouTube player interfaces, not stable public APIs. Keep them isolated and expect maintenance.
+
+## State and recovery
+
+IndexedDB stores each session by UUID. Checkpoints occur after transcript retrieval, local capture, and every Gemini batch.
+
+```text
+idle → transcript → awaiting_capture_window → capturing → extracting → staging → ready
+                    └───────────────────────────────► paused_rate_limit
+any active state ───────────────────────────────────► cancelled | error
+```
+
+- Raw JPEGs remain only while an unfinished extraction may need them.
+- Completed batches resume at the first unprocessed frame.
+- Service-worker interruption during capture requires a new capture because the media stream and metadata scouts are ephemeral.
+- Cancellation always attempts to stop capture, close owned tabs, and restore the lecture.
 
 ## Security and privacy boundaries
 
-- The Gemini key remains in Chrome local extension storage.
-- Whole-tab capture data is cropped to the video bounds in the offscreen document before it returns to the pipeline.
-- No LLM provider site is opened, read, or modified by the extension.
-- Copying the final prompt requires an explicit user action.
-- Untrusted text and frame content are explicitly delimited, and both AI prompts forbid following instructions embedded in lecture content.
-- No telemetry or WiseNotes network service exists.
-- WiseNotes blocks no ad requests and patches no player code. When an ad does play it presses YouTube's own Skip Ad control if YouTube renders one, and otherwise waits the ad out. Automating that click may conflict with YouTube's Terms of Service.
+- Gemini credentials stay in Chrome local extension storage.
+- The service worker never logs the key or lecture data.
+- The final prompt is copied only after an explicit user action.
+- The static GitHub Pages request exposes the YouTube video ID to GitHub infrastructure; this is disclosed in [PRIVACY.md](PRIVACY.md).
+- WiseNotes has no telemetry, account system, payment system, or application backend.
+- The current beta clicks YouTube’s own Skip Ad button when one appears and otherwise waits. This behavior is disclosed because it may conflict with YouTube’s terms.
 
 ## Compatibility target
 
-Desktop Chrome 116+, Manifest V3, English captioned YouTube lectures, and unpacked GitHub distribution. Other Chromium browsers may work but are not part of the beta acceptance target.
+Desktop Chrome 116+, Manifest V3, captioned YouTube lectures with direct or translated English captions, and unpacked GitHub distribution. Other Chromium browsers may work but are not acceptance targets.

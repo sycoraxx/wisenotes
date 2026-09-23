@@ -40,6 +40,7 @@ const ENTRIES = [
   "assets/icons/icon-32.png",
   "assets/icons/icon-48.png",
   "assets/icons/icon-128.png",
+  "assets/icons/wisenotes-mark.svg",
   "LICENSE",
   "PRIVACY.md"
 ];
@@ -83,7 +84,12 @@ execFileSync("zip", ["-r", "-X", "-q", zipPath, releaseName], { cwd: stageRoot }
 const listing = execFileSync("unzip", ["-Z1", zipPath], { encoding: "utf8" })
   .split("\n")
   .filter(Boolean);
-const leaked = listing.filter((entry) => FORBIDDEN.some((pattern) => pattern.test(entry)));
+const leaked = listing.filter((entry) => {
+  const relative = entry.startsWith(`${releaseName}/`)
+    ? entry.slice(releaseName.length + 1)
+    : entry;
+  return FORBIDDEN.some((pattern) => pattern.test(relative));
+});
 if (leaked.length) {
   throw new Error(`the package contains files it must not: ${leaked.join(", ")}`);
 }

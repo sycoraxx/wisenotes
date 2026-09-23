@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="WiseNotes">
+  <defs>
+    <linearGradient id="surface" x1="18" y1="10" x2="108" y2="122" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5b6070"/>
+      <stop offset="0.52" stop-color="#343740"/>
+      <stop offset="1" stop-color="#1c1d22"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(94 20) rotate(127) scale(92)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4aa8ff" stop-opacity=".56"/>
+      <stop offset=".62" stop-color="#7f8dff" stop-opacity=".12"/>
+      <stop offset="1" stop-color="#7f8dff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="paper" x1="75" y1="37" x2="101" y2="96" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff"/>
+      <stop offset="1" stop-color="#e8eaf0"/>
+    </linearGradient>
+    <filter id="soft-shadow" x="-30%" y="-30%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#08090c" flood-opacity=".28"/>
+    </filter>
+  </defs>
+
+  <rect x="3" y="3" width="122" height="122" rx="31" fill="url(#surface)"/>
+  <rect x="3" y="3" width="122" height="122" rx="31" fill="url(#glow)"/>
+  <rect x="4" y="4" width="120" height="120" rx="30" fill="none" stroke="#fff" stroke-opacity=".22" stroke-width="2"/>
+
+  <g filter="url(#soft-shadow)">
+    <path d="M31 44.5A9.5 9.5 0 0 1 40.5 35H78v52H40.5A9.5 9.5 0 0 1 31 77.5z" fill="none" stroke="#f8f9fc" stroke-width="7" stroke-linejoin="round"/>
+    <path d="M72 35h21l14 14v38.5A8.5 8.5 0 0 1 98.5 96H72z" fill="url(#paper)"/>
+    <path d="M93 35v10a4 4 0 0 0 4 4h10z" fill="#b9c2d2"/>
+  </g>
+</svg>
