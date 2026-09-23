@@ -25,7 +25,7 @@ import {
 import { buildSynthesisPrompt } from "./lib/prompt.js";
 import { AUTO_PLANNER_MODEL, inferFrameTriggers } from "./lib/planner.js";
 import { JOB_STATES, assertTransition, publicSession } from "./lib/state.js";
-import { buildEmbedUrl, durationMatches, isEmbedUrl, paceDelayMs } from "./lib/embed.js";
+import { buildPlayerPageUrl, durationMatches, isPlayerPageUrl, paceDelayMs } from "./lib/embed.js";
 import {
   captionJson3Url,
   dedupeSegments,
@@ -698,9 +698,10 @@ async function stopCaptureAndRestore(session) {
   }
 }
 
-// Chooses where frames come from. The embed backend is preferred because an embedded player is
-// far less likely to serve ads, so a non-Premium user is not stalled mid-capture. The watch
-// backend preserves the previous behaviour and is used whenever the embed tab is unusable.
+// Chooses where frames come from. The embed backend is preferred because an embedded player does
+// not serve the pre-roll the watch page serves, so a non-Premium user is not stalled mid-capture.
+// The watch backend preserves the previous behaviour and is used whenever the player page is
+// unusable, which also keeps WiseNotes working offline.
 async function prepareCaptureBackend(session, planningWarning) {
   if (!EMBED_CAPTURE_ENABLED) return prepareWatchBackend(session, planningWarning);
 
@@ -714,15 +715,17 @@ async function prepareCaptureBackend(session, planningWarning) {
       6
     );
     // Created active on purpose: a background tab is treated as hidden, and YouTube refuses to
-    // load media into a hidden document.
+    // load media into a hidden document. The tab opens the hosted player page rather than the raw
+    // embed URL, because YouTube only plays an embed whose request carries a Referer naming a real
+    // http(s), non-YouTube origin - see lib/embed.js for the shapes that fail.
     const captureTab = await chrome.tabs.create({
-      url: buildEmbedUrl(session.videoId),
+      url: buildPlayerPageUrl(session.videoId),
       active: true
     });
     captureTabId = captureTab?.id;
     if (!Number.isInteger(captureTabId)) throw new Error("Chrome did not open the capture tab");
 
-    await waitForEmbedTab(captureTabId);
+    await waitForPlayerTab(captureTabId);
     await ensureOffscreen();
     // Capture is started before the player is asked to load anything, so the tab is already
     // marked as captured and keeps running after the user returns to their lecture tab.
@@ -832,14 +835,14 @@ function needsInvocation(error) {
   return /not been invoked|activeTab|cannot be captured|not allowed/i.test(String(error?.message || error));
 }
 
-async function waitForEmbedTab(tabId, timeoutMs = CAPTURE_TAB_PREPARE_TIMEOUT_MS) {
+async function waitForPlayerTab(tabId, timeoutMs = CAPTURE_TAB_PREPARE_TIMEOUT_MS) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
-    if (tab && isEmbedUrl(tab.url)) return tab;
+    if (tab && isPlayerPageUrl(tab.url)) return tab;
     await sleep(250);
   }
-  throw new Error("the capture tab did not load the YouTube embed player");
+  throw new Error("the capture tab did not load the WiseNotes player page");
 }
 
 // Proves the capture tab really produces usable lecture pixels before the run commits to it.

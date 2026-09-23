@@ -9,18 +9,23 @@ import {
   CAPTURE_WINDOW_HOST,
   EMBED_CHROME_SELECTORS,
   EMBED_HOSTS,
+  EMBED_PARAMS,
+  PLAYER_PAGE_URL,
+  VIDEO_ID_PATTERN,
   buildEmbedUrl,
+  buildPlayerPageUrl,
   durationMatches,
   isEmbedPath,
   isEmbedUrl,
+  isPlayerPageUrl,
   paceDelayMs,
   parseWidgetMessage
 } from "../lib/embed.js";
 
-const ytContentSource = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), "..", "yt-content.js"),
-  "utf8"
-);
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+const ytContentSource = readFileSync(join(repoRoot, "yt-content.js"), "utf8");
+const playerPageSource = readFileSync(join(repoRoot, "docs", "player.html"), "utf8");
+const manifest = JSON.parse(readFileSync(join(repoRoot, "manifest.json"), "utf8"));
 
 test("embed URLs disable chrome and mute for unattended autoplay", () => {
   const url = new URL(buildEmbedUrl("dQw4w9WgXcQ"));
@@ -111,4 +116,69 @@ test("yt-content.js mirrors every embed selector", () => {
       `yt-content.js is missing the mirrored selector ${selector}`
     );
   }
+});
+
+// The capture tab opens a hosted http(s) page, because YouTube refuses an embed whose request has
+// no Referer naming a real third-party origin. A Chrome extension cannot be such an origin.
+test("the player page URL carries a validated video id", () => {
+  const url = new URL(buildPlayerPageUrl("dQw4w9WgXcQ"));
+  assert.equal(url.origin, new URL(PLAYER_PAGE_URL).origin);
+  assert.equal(url.pathname, new URL(PLAYER_PAGE_URL).pathname);
+  assert.equal(url.searchParams.get("v"), "dQw4w9WgXcQ");
+
+  // A malformed id must never reach the hosted page as a frameable parameter.
+  for (const bad of ["", "   ", "short", "way-too-long-to-be-a-video-id", "../../etc/passwd", null]) {
+    assert.throws(() => buildPlayerPageUrl(bad), /video id/);
+  }
+});
+
+test("player page URLs are recognised only on the exact origin and path", () => {
+  assert.equal(isPlayerPageUrl(buildPlayerPageUrl("dQw4w9WgXcQ")), true);
+  assert.equal(isPlayerPageUrl(PLAYER_PAGE_URL), true);
+  assert.equal(isPlayerPageUrl("https://sycoraxx.github.io.evil.example/wisenotes/player.html"), false);
+  assert.equal(isPlayerPageUrl("https://evil.example/wisenotes/player.html"), false);
+  assert.equal(isPlayerPageUrl("https://sycoraxx.github.io/other/player.html"), false);
+  assert.equal(isPlayerPageUrl("https://www.youtube-nocookie.com/embed/abc"), false);
+  assert.equal(isPlayerPageUrl("not a url"), false);
+});
+
+// docs/player.html is served over http and cannot import a module, so it repeats the query string
+// and the id pattern. These two tests are the only thing keeping the copies honest.
+test("the hosted player page mirrors the canonical embed params", () => {
+  const declared = /var EMBED_PARAMS = "([^"]+)"/.exec(playerPageSource);
+  assert.ok(declared, "docs/player.html should declare EMBED_PARAMS");
+  assert.equal(declared[1], EMBED_PARAMS);
+});
+
+test("the hosted player page mirrors the video id pattern", () => {
+  const declared = /var VIDEO_ID_PATTERN = (\/\^[^;]+?\/);/.exec(playerPageSource);
+  assert.ok(declared, "docs/player.html should declare VIDEO_ID_PATTERN");
+  assert.equal(declared[1], VIDEO_ID_PATTERN.toString());
+});
+
+test("the hosted player page keeps a referrer-bearing policy", () => {
+  // no-referrer (or same-origin) on this page would strip the Referer the embed requires and
+  // playback would fail with Error 153, so pin the policy rather than merely allowing one.
+  const policy = /<meta name="referrer" content="([^"]+)">/.exec(playerPageSource);
+  assert.ok(policy, "docs/player.html needs an explicit referrer policy");
+  assert.equal(policy[1], "strict-origin-when-cross-origin");
+});
+
+// WiseNotes crops the captured tab image using the video element's rectangle measured inside the
+// iframe, so any offset, margin, or centring in the player page would shift every crop.
+test("the hosted player page pins the iframe flush to the viewport origin", () => {
+  const css = /#player\s*\{([^}]+)\}/.exec(playerPageSource);
+  assert.ok(css, "docs/player.html should style #player");
+  for (const rule of ["position: fixed", "inset: 0", "width: 100%", "height: 100%", "border: 0"]) {
+    assert.ok(css[1].includes(rule), `#player must declare "${rule}" so crops stay aligned`);
+  }
+});
+
+test("the content script runs in every frame and only the player frame answers", () => {
+  assert.equal(manifest.content_scripts[0].all_frames, true);
+  assert.equal(manifest.content_scripts[0].js.includes("yt-content.js"), true);
+  assert.ok(
+    ytContentSource.includes("window.top !== window && !isEmbedPage()"),
+    "nested frames must not answer capture commands"
+  );
 });

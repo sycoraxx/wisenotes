@@ -42,7 +42,8 @@
     {
       "matches": ["https://www.youtube.com/*", "https://www.youtube-nocookie.com/*"],
       "js": ["yt-content.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ]
 }

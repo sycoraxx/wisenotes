@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WiseNotes player</title>
+<meta name="robots" content="noindex">
+<!--
+  Why this page exists
+  ====================
+  YouTube will not play an embed unless the request carries a Referer naming a real http(s),
+  non-YouTube origin. The player derives what it calls the "embedder identity" from that header.
+  Every other shape was tested against YouTube's own error codes and fails:
+
+    top-level /embed/ navigation     no Referer at all          Error 153  missing.referrer
+    embed inside a chrome-extension: no Referer (Blink never emits an extension URL as a Referer,
+                                     even with referrerpolicy="origin")       Error 153
+    embed inside a youtube.com page  Referer is youtube.com                  Error 152  denied
+    embed inside this page           Referer is <host>                       plays, no pre-roll ad
+
+  A Chrome extension cannot be an http(s) origin, so WiseNotes opens this page in a tab instead.
+  Its content script is declared with all_frames, so it runs inside the nocookie iframe and drives
+  the <video> element directly: seeking, ad detection, ad skipping, and duration checks all happen
+  there.
+
+  This page is deliberately inert: no scripts from anywhere else, no analytics, no storage, and it
+  frames nothing except a YouTube video id that matches VIDEO_ID_PATTERN.
+-->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Must stay a referrer-bearing policy. no-referrer here would break playback with Error 153. -->
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<style>
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+    color: #eee;
+    font: 15px system-ui, sans-serif;
+  }
+
+  /*
+   * The player is pinned to the exact top-left corner and fills the viewport. WiseNotes measures
+   * the video element's rectangle inside this iframe and crops the captured tab image with those
+   * coordinates, so any offset, margin, padding, border, or centring here shifts every crop.
+   * Keep the frame flush with 0,0 at 100% of both axes.
+   */
+  #player {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    display: block;
+  }
+
+  #problem {
+    padding: 24px;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+<iframe id="player" title="Lecture player" allow="autoplay; encrypted-media" allowfullscreen></iframe>
+<script>
+  // Mirrors EMBED_PARAMS in lib/embed.js. A page served over http cannot import a module, so
+  // test/embed.test.js reads this file and fails if the two strings ever drift apart.
+  var EMBED_PARAMS = "autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&iv_load_policy=3&playsinline=1&fs=0&disablekb=1";
+
+  // Mirrors VIDEO_ID_PATTERN in lib/embed.js.
+  var VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
+
+  var videoId = new URLSearchParams(location.search).get("v") || "";
+  var player = document.getElementById("player");
+
+  if (VIDEO_ID_PATTERN.test(videoId)) {
+    // youtube-nocookie is the privacy-enhanced host, and CAPTURE_WINDOW_HOST in lib/embed.js.
+    player.src = "https://www.youtube-nocookie.com/embed/" + videoId + "?" + EMBED_PARAMS;
+  } else {
+    player.remove();
+    var problem = document.createElement("div");
+    problem.id = "problem";
+    problem.textContent =
+      "WiseNotes player: expected a YouTube video id in the ?v= parameter. " +
+      "This page is opened automatically by the WiseNotes extension.";
+    document.body.appendChild(problem);
+  }
+</script>
+</body>
+</html>

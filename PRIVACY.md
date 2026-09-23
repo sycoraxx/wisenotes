@@ -2,6 +2,12 @@
 
 WiseNotes has no backend and collects no telemetry. Data moves only between the user’s browser and the AI services the user explicitly configures.
 
+## The hosted player page
+
+Frame capture opens the lecture in an embedded player on a small static page published from this repository at `sycoraxx.github.io/wisenotes/player.html`. YouTube refuses to play an embedded video unless the request carries a referrer naming a real website, and an extension cannot be one, so that page cannot be bundled inside the extension itself.
+
+The page is static HTML: it loads no scripts from anywhere else, collects nothing, stores nothing, and sends nothing anywhere. Because it is fetched over HTTP, GitHub’s Pages infrastructure sees the request in the same way it would see any visit to that page, and the request carries only the YouTube video id. If the page cannot be reached, WiseNotes captures the user’s own watch tab instead and makes no such request.
+
 ## Data stored locally
 
 - Gemini API key and selected model ID in Chrome local extension storage.

@@ -46,12 +46,15 @@ Test the two target formats first and treat them as acceptance-critical: a chalk
 - Pause during a blurred transition and confirm WiseNotes prefers a clearer frame from 1.25 seconds before or after, but never substitutes a different slide.
 - Confirm the 30-minute frame cap is 23, the one-hour cap is 40, and the two-hour cap is 60.
 - Confirm playback time, playing state, rate, volume, mute, and scroll position are restored after success, error, and cancellation.
-- With a non-Premium account, confirm the dedicated capture tab opens, loads the embed player, and that capture completes across an ad break without the run stalling.
+- With a non-Premium account, confirm the dedicated capture tab opens the player page, that the embedded player loads, shows no pre-roll, and that capture completes across the whole lecture without the run stalling.
+- Confirm embedded seeking is exact: watch the progress bar during capture and check that frames requested from the beginning, middle, and end of a long lecture are all lecture content, not the first frame repeated.
+- Confirm the player is pinned to the top-left corner and fills the capture tab, so the saved crop contains only the video frame with no page background, offset, or border.
+- Stop the network (or block the player page) and confirm WiseNotes reports that the player page was unavailable and captures the lecture tab instead.
 - Confirm that when the capture tab needs permission, the popup names it and asks for one toolbar click, and that taking no action falls back to lecture-tab capture after about a minute.
 - Confirm the capture tab does not disturb the lecture tab's own playback beyond the documented pause, and that returning to the lecture tab during capture does not blank the captured frames.
 - Confirm that when YouTube renders a Skip Ad control, WiseNotes presses it and capture resumes, and that the frame captured immediately afterwards is lecture content rather than an ad.
 - Confirm the lecture tab is paused for the duration, and that timestamp, playing state, rate, volume, mute, quality, layout, and scroll position are all restored after success, error, and cancellation, with the capture tab closed in every case.
-- Play a lecture that forbids embedding and confirm WiseNotes reports that the capture tab was unavailable and then captures the lecture tab instead.
+- Play a lecture that forbids embedding and confirm WiseNotes reports that the player page was unavailable and then captures the lecture tab instead.
 - Force a blank tab stream and confirm visible-tab fallback returns only the player crop.
 
 ## Gemini

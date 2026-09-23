@@ -27,7 +27,8 @@ Popup user gesture
   -> MV3 service worker
      -> YouTube content script: transcript, playback snapshot, seek control
      -> resilient stable Gemini Flash/Flash-Lite chain: semantic visual-moment planning from the full transcript
-     -> dedicated capture tab: YouTube embed player and seek control (no quality request)
+     -> dedicated capture tab: hosted player page framing the embed, plus seek control
+        (no quality request; the embed serves no pre-roll, so non-Premium users are not stalled)
      -> Chrome tabCapture stream
         -> offscreen document: crop, local dHash regions, edge map, sharpness, blank detection
      -> metadata-only local scouts: accumulation/reset/scroll/camera segmentation and peak ranking
@@ -38,7 +39,9 @@ Popup user gesture
      -> user chooses an LLM provider, pastes, reviews, and sends
 ```
 
-Frames are captured from a dedicated capture tab that loads the YouTube embed player, because an embedded player is far less likely to serve ads than the watch page. Users without Premium are therefore not stalled mid-capture. The user's own watch tab supplies the transcript and the playback snapshot and is never seeked; it is only paused and muted for the duration of the capture and restored afterwards.
+Frames are captured from a dedicated capture tab that plays the lecture in an embedded player, because an embedded player does not serve the pre-roll the watch page serves. Measured in one signed-out browser on the same video, the watch page served a 15-second pre-roll and the embed served none. Users without Premium are therefore not stalled mid-capture. The user's own watch tab supplies the transcript and the playback snapshot and is never seeked; it is only paused and muted for the duration of the capture and restored afterwards.
+
+YouTube plays an embed only when the request carries a `Referer` naming a real http(s), non-YouTube origin, because the player reads what it calls the embedder identity out of that header. A Chrome extension cannot be such an origin, and every alternative shape was tested against YouTube's own error codes: a top-level embed URL sends no referrer (Error 153), an embed inside a `chrome-extension://` page also sends none, even with `referrerpolicy="origin"` (Error 153), and an embed inside a youtube.com page is a denied embedder (Error 152). The capture tab therefore opens `docs/player.html`, a static page published by GitHub Pages from this repository. `yt-content.js` is declared with `all_frames` so it runs inside the framed player and keeps full seek, ad detection, ad skipping, and duration control; nested frames are ignored so they cannot answer in the player's place.
 
 Chrome only permits tab capture for a tab the user has invoked the extension on. The watch tab carries that grant automatically, but the capture tab does not, so WiseNotes asks the user to click the WiseNotes toolbar icon once on the capture tab. That wait is bounded; if the grant never arrives, or the embed player cannot be used at all, WiseNotes falls back to capturing the watch page directly. In that fallback mode it temporarily requests the highest exposed quality and enables Theater mode, then restores the prior quality preference and layout.
 

@@ -30,6 +30,13 @@
     if (!["YOUTUBE_SNAPSHOT", "SEEK_VIDEO", "RESTORE_VIDEO", "EXTRACT_TRANSCRIPT", "PREPARE_EMBED", "SET_VIDEO_STATE"].includes(message?.type)) {
       return false;
     }
+    // The script is declared with all_frames because the ad-free capture tab is a plain http(s)
+    // page that frames the player, and only the frame that owns the player can answer. Chrome also
+    // injects into about:blank frames on the watch page, which would otherwise race the real player
+    // frame and answer with "no video player was found".
+    if (window.top !== window && !isEmbedPage()) {
+      return false;
+    }
     handleMessage(message).then(
       (result) => sendResponse({ ok: true, ...result }),
       (error) => sendResponse({ ok: false, error: error.message })
