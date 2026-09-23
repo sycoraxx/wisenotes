@@ -38,15 +38,23 @@ The official YouTube Data API is not a replacement for arbitrary public lectures
 
 ## Install
 
-WiseNotes requires desktop Chrome 116 or newer.
+WiseNotes requires desktop Chrome 116 or newer. Most users want the packaged zip; see [Releases](#releases).
 
-1. Download or clone this repository.
+1. Download `wisenotes-<version>.zip` from [Releases](#releases) and unzip it, or clone this repository if you want to work on it.
 2. Open `chrome://extensions`.
 3. Enable **Developer mode**.
-4. Choose **Load unpacked** and select this repository folder.
+4. Choose **Load unpacked** and select the unzipped folder, or this repository folder.
 5. Open WiseNotes settings and save a Gemini API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
 
 No package installation or build command is required for extension users.
+
+## Releases
+
+Each version is published as `releases/wisenotes-<version>.zip`, containing only the files Chrome needs to run the extension. Tests, the hosted player page, and the uncompressed logo source are left out. `LICENSE` and `PRIVACY.md` are included, because the MIT terms require the licence notice to travel with copies and the Chrome Web Store requires an accessible privacy policy.
+
+The zip is built by `npm run package` from an explicit file list, and the script fails if the manifest points at a file the package is missing, so an incomplete extension cannot be published by accident. Regenerate it whenever the version in `manifest.json` changes and commit the result, and attach the same file to the matching GitHub Release when you tag one.
+
+Frame capture loads its player page from `sycoraxx.github.io/wisenotes`. If that page cannot be reached, WiseNotes captures the lecture tab directly instead.
 
 ## Use
 
@@ -126,6 +134,9 @@ popup.*                Setup, progress, resume, universal-prompt copy, and data 
 options.*              Local Gemini key and model settings
 db.js                  IndexedDB session store
 lib/                   Pure caption, embed, frame, planner, prompt, state, hash, trigger, and Gemini modules
+docs/player.html       Hosted player page the capture tab opens, published by GitHub Pages
+releases/              Release zips, one per version, built by npm run package
+tools/package.mjs      Runtime-only packaging script
 test/                  Dependency-free unit and manual test coverage
 ```
 

@@ -6,6 +6,7 @@
   "description": "Dependency-free Chrome extension for grounded lecture notes.",
   "scripts": {
     "test": "node --test",
-    "check": "node --check background.js && node --check popup.js && node --check options.js && node --check offscreen.js && node --check yt-content.js"
+    "check": "node --check background.js && node --check popup.js && node --check options.js && node --check offscreen.js && node --check yt-content.js",
+    "package": "node tools/package.mjs"
   }
 }
