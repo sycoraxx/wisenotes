@@ -20,7 +20,7 @@ WiseNotes captures the frames in every case, so the notation, code, and terminal
 ## What it does
 
 1. Reads the English YouTube captions and their timestamps.
-2. Opens the lecture in an embedded player on a small static page published from this repository, then captures real video pixels through Chrome’s tab-capture API. YouTube does not serve the watch page’s pre-roll ad to an embedded player. If that page cannot be reached, WiseNotes captures the user’s own watch tab instead, temporarily requesting its highest exposed quality and Theater mode.
+2. Opens the lecture in an embedded player on a small static page published from this repository, then captures real video pixels through Chrome’s tab-capture API. YouTube does not serve the watch page’s pre-roll ad to an embedded player. Chrome requires one toolbar click on that new tab before it may be captured, which WiseNotes signals with a red badge on its icon. If that page cannot be reached, WiseNotes captures the user’s own watch tab instead, temporarily requesting its highest exposed quality and Theater mode.
 3. Discovers every explicit stable Gemini Flash model available to the user's API key, tries the last successful model first, then falls through from full Flash to Flash-Lite until one can infer visually important timestamps from the complete transcript. Those moments are combined with local 30-second coverage probes.
 4. Replaces soft captures with a clearer nearby view of the same scene, measures visual changes locally, and removes duplicate frames.
 5. Sends only the selected frames—with nearby caption context—to Gemini Flash-Lite for structured visual and equation extraction.

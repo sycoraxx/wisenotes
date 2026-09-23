@@ -50,7 +50,7 @@ Test the two target formats first and treat them as acceptance-critical: a chalk
 - Confirm embedded seeking is exact: watch the progress bar during capture and check that frames requested from the beginning, middle, and end of a long lecture are all lecture content, not the first frame repeated.
 - Confirm the player is pinned to the top-left corner and fills the capture tab, so the saved crop contains only the video frame with no page background, offset, or border.
 - Stop the network (or block the player page) and confirm WiseNotes reports that the player page was unavailable and captures the lecture tab instead.
-- Confirm that when the capture tab needs permission, the popup names it and asks for one toolbar click, and that taking no action falls back to lecture-tab capture after about a minute.
+- Confirm that when the player tab needs permission, the toolbar icon shows a red `1` badge whose tooltip reads "Click the WiseNotes icon once to allow capturing this tab", that the window comes forward, and that the click clears the badge and starts capture. Taking no action must fall back to lecture-tab capture after about a minute.
 - Confirm the capture tab does not disturb the lecture tab's own playback beyond the documented pause, and that returning to the lecture tab during capture does not blank the captured frames.
 - Confirm that when YouTube renders a Skip Ad control, WiseNotes presses it and capture resumes, and that the frame captured immediately afterwards is lecture content rather than an ad.
 - Confirm the lecture tab is paused for the duration, and that timestamp, playing state, rate, volume, mute, quality, layout, and scroll position are all restored after success, error, and cancellation, with the capture tab closed in every case.

@@ -729,7 +729,7 @@ async function prepareCaptureBackend(session, planningWarning) {
     await ensureOffscreen();
     // Capture is started before the player is asked to load anything, so the tab is already
     // marked as captured and keeps running after the user returns to their lecture tab.
-    const streamId = await acquireCaptureStream(waiting, captureTabId, "the ad-free capture tab");
+    const streamId = await acquireCaptureStream(waiting, captureTabId, "the WiseNotes player tab");
     const started = await runtimeMessage({ type: "OFFSCREEN_START_CAPTURE", streamId });
     if (!started?.ok) throw new Error(started?.error || "Could not start capture on the embed tab");
 
@@ -760,7 +760,7 @@ async function prepareCaptureBackend(session, planningWarning) {
     if (Number.isInteger(captureTabId) && captureTabId) {
       await chrome.tabs.remove(captureTabId).catch(() => {});
     }
-    const notice = `WiseNotes could not use the ad-free capture tab (${friendlyError(error)}), so it captured the lecture tab instead.${captureTabHint(error)}`;
+    const notice = `WiseNotes could not use the ad-free player tab (${friendlyError(error)}), so it captured the lecture tab instead.${captureTabHint(error)}`;
     return prepareWatchBackend(waiting, [planningWarning, notice].filter(Boolean).join(" "));
   }
 }
@@ -802,10 +802,11 @@ async function prepareWatchBackend(session, warning) {
   };
 }
 
-// Chrome only lets WiseNotes capture a tab the user has invoked the extension on. The
-// user's own lecture tab already carries that grant; a window WiseNotes opens itself does
-// not, so the user is asked to click the WiseNotes icon there once. The wait is bounded, and
-// the run falls back to the lecture tab if the grant never arrives.
+// Chrome only lets WiseNotes capture a tab the user has invoked the extension on. The user's own
+// lecture tab already carries that grant; a tab WiseNotes opens itself does not, so the user is
+// asked to click the WiseNotes icon there once. By then the popup is long closed, so the request has
+// to live where the user is actually looking instead of in a popup nobody has open. The wait is
+// bounded, and the run falls back to the lecture tab if the grant never arrives.
 async function acquireCaptureStream(session, tabId, label) {
   try {
     return await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
@@ -813,22 +814,48 @@ async function acquireCaptureStream(session, tabId, label) {
     if (!needsInvocation(error)) throw error;
   }
 
+  await requestCaptureGrant(session, tabId, label);
+  const deadline = Date.now() + CAPTURE_TAB_INVOKE_TIMEOUT_MS;
+  try {
+    while (Date.now() < deadline) {
+      await sleep(1000);
+      try {
+        return await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+      } catch (error) {
+        if (!needsInvocation(error)) throw error;
+      }
+    }
+  } finally {
+    await clearCaptureGrantRequest(tabId);
+  }
+  throw new Error(`${label} was never activated`);
+}
+
+// Three signals, because the popup alone was not enough: a numbered badge on the toolbar icon, a
+// tooltip on that same icon, and the window brought forward so the new tab is actually on screen.
+async function requestCaptureGrant(session, tabId, label) {
   await setState(
     session,
     JOB_STATES.AWAITING_CAPTURE_WINDOW,
-    `Click the WiseNotes toolbar icon once on ${label} to allow capture…`,
+    `Action needed: click the WiseNotes icon in the toolbar once, on ${label}, to allow capture.`,
     6
   );
-  const deadline = Date.now() + CAPTURE_TAB_INVOKE_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    await sleep(1000);
-    try {
-      return await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
-    } catch (error) {
-      if (!needsInvocation(error)) throw error;
-    }
+  await chrome.action.setBadgeBackgroundColor({ tabId, color: "#c0392b" }).catch(() => {});
+  await chrome.action.setBadgeText({ tabId, text: "1" }).catch(() => {});
+  await chrome.action.setTitle({
+    tabId,
+    title: "Click the WiseNotes icon once to allow capturing this tab"
+  }).catch(() => {});
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (tab) {
+    await chrome.tabs.update(tabId, { active: true }).catch(() => {});
+    await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
   }
-  throw new Error(`${label} was never activated`);
+}
+
+async function clearCaptureGrantRequest(tabId) {
+  await chrome.action.setBadgeText({ tabId, text: "" }).catch(() => {});
+  await chrome.action.setTitle({ tabId, title: "WiseNotes" }).catch(() => {});
 }
 
 function needsInvocation(error) {
