@@ -44,7 +44,8 @@ Test the two target formats first and treat them as acceptance-critical: a chalk
 - Confirm duplicate static slides are removed.
 - Confirm a changing board around a trigger receives the later settled capture.
 - Pause during a blurred transition and confirm WiseNotes prefers a clearer frame from 1.25 seconds before or after, but never substitutes a different slide.
-- Confirm the 30-minute frame cap is 23, the one-hour cap is 40, and the two-hour cap is 60.
+- Confirm the frame budget scales at 0.6 frames per minute with no ceiling: 18 frames for 30 minutes, 36 for an hour, 72 for two hours, and proportionally more beyond that. A three-hour lecture must select more frames than a one-hour lecture, not the same number.
+- Confirm a lecture longer than two hours starts and completes, since there is no length limit.
 - Confirm playback time, playing state, rate, volume, mute, and scroll position are restored after success, error, and cancellation.
 - With a non-Premium account, confirm the dedicated capture tab opens the player page, that the embedded player loads, shows no pre-roll, and that capture completes across the whole lecture without the run stalling.
 - Confirm embedded seeking is exact: watch the progress bar during capture and check that frames requested from the beginning, middle, and end of a long lecture are all lecture content, not the first frame repeated.

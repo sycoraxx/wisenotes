@@ -112,9 +112,6 @@ async function startJob({ youtubeTabId }) {
   if (!snapshotResponse.ok) throw new Error(snapshotResponse.error);
   if (!snapshotResponse.videoId) throw new Error("The current page does not contain a normal YouTube video ID.");
   if (snapshotResponse.duration <= 0) throw new Error("Wait for the lecture to load, then try again.");
-  if (snapshotResponse.duration > 2 * 60 * 60 + 1) {
-    throw new Error("WiseNotes public beta currently supports lectures up to two hours.");
-  }
 
   const now = Date.now();
   const session = {

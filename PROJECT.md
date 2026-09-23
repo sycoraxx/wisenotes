@@ -77,4 +77,4 @@ Gemini Flash-Lite then receives batches of at most 16 selected frames. Each imag
 
 ## Compatibility target
 
-Desktop Chrome 116+, Manifest V3, English captioned YouTube lectures up to two hours, and unpacked GitHub distribution. Other Chromium browsers may work but are not part of the beta acceptance target.
+Desktop Chrome 116+, Manifest V3, English captioned YouTube lectures, and unpacked GitHub distribution. Other Chromium browsers may work but are not part of the beta acceptance target.
