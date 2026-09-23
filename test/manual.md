@@ -40,6 +40,8 @@ Test the two target formats first and treat them as acceptance-critical: a chalk
 - Confirm Chrome shows tab capture only after Start is clicked.
 - Start from a lower manual quality and default layout, then force the lecture-tab fallback and confirm WiseNotes requests the highest exposed quality, uses Theater mode during capture, and restores the prior quality/layout afterward.
 - Confirm the saved crop contains the actual video frame and not comments, recommendations, browser chrome, or another tab.
+- Confirm the embedded player is pinned to the highest quality the lecture offers: no quality warning appears, and a frame late in the lecture is as sharp as one from the start rather than having dropped resolution mid-run.
+- Confirm no player chrome reaches a saved frame: no title bar, control bar, progress bar, YouTube watermark, gradient scrim, or "Watch on YouTube" overlay, checked on a frame captured after a seek as well as the first frame, since YouTube restores its chrome when the player is interacted with.
 - Confirm formulas and diagrams absent from captions appear in the Gemini extraction.
 - Confirm duplicate static slides are removed.
 - Confirm a changing board around a trigger receives the later settled capture.

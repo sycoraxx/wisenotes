@@ -28,7 +28,7 @@ Popup user gesture
      -> YouTube content script: transcript, playback snapshot, seek control
      -> resilient stable Gemini Flash/Flash-Lite chain: semantic visual-moment planning from the full transcript
      -> dedicated capture tab: hosted player page framing the embed, plus seek control
-        (no quality request; the embed serves no pre-roll, so non-Premium users are not stalled)
+        (highest offered quality pinned; the embed serves no pre-roll, so non-Premium users are not stalled)
      -> Chrome tabCapture stream
         -> offscreen document: crop, local dHash regions, edge map, sharpness, blank detection
      -> metadata-only local scouts: accumulation/reset/scroll/camera segmentation and peak ranking

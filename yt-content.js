@@ -19,11 +19,17 @@
     ".ytp-gradient-top",
     ".ytp-gradient-bottom",
     ".ytp-title",
+    ".ytp-watermark",
+    ".ytp-large-play-button",
+    ".ytp-spinner",
+    ".ytp-cued-thumbnail-overlay",
+    ".ytp-impression-link",
     ".ytp-pause-overlay",
     ".ytp-cards-teaser",
     ".ytp-ce-element",
     ".ytp-shorts-brand",
-    ".ytp-paid-content-overlay"
+    ".ytp-paid-content-overlay",
+    ".ytp-ad-overlay-container"
   ];
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -43,8 +49,25 @@
     );
     return true;
   });
+  // The capture tab's top frame is a hosted page the extension deliberately has no host permission
+  // for, and chrome.scripting refuses to inject into "all frames" of a tab it cannot fully access.
+  // Reporting this frame's id lets the background aim an injection at exactly this frame, for the one
+  // job only the page's own world can do: pinning the highest offered playback quality.
+  function announceEmbedFrame() {
+    if (!isEmbedPage()) return;
+    try {
+      chrome.runtime.sendMessage({ type: "EMBED_FRAME_READY" }).catch(() => {});
+    } catch {
+      // The extension context is gone, so there is nothing left to announce to.
+    }
+  }
 
+  // Once at load, and again whenever a command arrives, so a restarted service worker relearns this
+  // frame id without needing the capture tab to be reloaded.
+  announceEmbedFrame();
   async function handleMessage(message) {
+    // Keeps the background's record of this frame fresh across service worker restarts.
+    announceEmbedFrame();
     switch (message.type) {
       case "YOUTUBE_SNAPSHOT":
         return snapshot();
@@ -124,6 +147,11 @@
     await waitForDecodedFrame(video);
     document.querySelector(".html5-video-player")?.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true }));
     await sleep(180);
+    // YouTube restores its own chrome as soon as the player is interacted with, so the hiding is
+    // re-applied immediately before every capture instead of only once when the player is prepared.
+    // Only the embed page does this: the watch backend captures the user's own tab and must not
+    // alter what they see there.
+    if (isEmbedPage()) hideEmbedChrome();
     return {
       adShowing: false,
       actualTime: video.currentTime,
@@ -191,6 +219,19 @@
       for (const node of document.querySelectorAll(selector)) {
         node.style.setProperty("display", "none", "important");
       }
+    }
+    // Backstop for the curated list above: inside the player, hide everything that is not the video
+    // or one of its ancestors. The video's own chain is kept, so the picture cannot be hidden by
+    // accident, and a renamed or newly added overlay cannot leak into a captured frame.
+    const player = document.querySelector("#movie_player, .html5-video-player");
+    const video = player?.querySelector("video.html5-main-video, video");
+    if (!player || !video) return;
+    const keep = new Set();
+    for (let node = video; node && node !== player.parentElement; node = node.parentElement) {
+      keep.add(node);
+    }
+    for (const node of player.querySelectorAll("*")) {
+      if (!keep.has(node)) node.style.setProperty("display", "none", "important");
     }
   }
 

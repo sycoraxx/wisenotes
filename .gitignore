@@ -5,3 +5,5 @@ node_modules/
 # Staging directory used while building a release zip. It is deleted on success, so anything left
 # here means packaging failed part way through.
 releases/.stage/
+# Extracted release copies. Unzipping next to the archive should never end up committed.
+releases/wisenotes-*/

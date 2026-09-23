@@ -52,8 +52,19 @@ if (chrome.storage.local.setAccessLevel) {
   chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }).catch(() => {});
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+// Frame id of the framed player inside the capture tab, reported by the content script that runs
+// there. Needed because chrome.scripting cannot inject into "all frames" of a tab whose top frame the
+// extension has no host permission for.
+const embedFrameIds = new Map();
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (String(message?.type || "").startsWith("OFFSCREEN_")) return false;
+  if (message?.type === "EMBED_FRAME_READY") {
+    if (Number.isInteger(sender?.tab?.id) && Number.isInteger(sender.frameId)) {
+      embedFrameIds.set(sender.tab.id, sender.frameId);
+    }
+    return false;
+  }
   handleMessage(message).then(
     (result) => sendResponse({ ok: true, ...result }),
     (error) => sendResponse({ ok: false, error: friendlyError(error) })
@@ -742,6 +753,11 @@ async function prepareCaptureBackend(session, planningWarning) {
     if (!durationMatches(session.duration, prepared.duration, 3)) {
       throw new Error("the embed player reported a different lecture duration");
     }
+    // Pinned before the first probe, so every captured frame comes from the highest level offered.
+    const quality = await prepareEmbedQuality(captureTabId);
+    const qualityWarning = quality?.requested
+      ? ""
+      : "WiseNotes could not pin the embedded player's quality, so the capture used whatever resolution the player chose.";
     await probeCaptureTab(captureTabId);
     await setVideoState(session.youtubeTabId, { paused: true, muted: true });
 
@@ -750,7 +766,7 @@ async function prepareCaptureBackend(session, planningWarning) {
         captureBackend: "embed",
         captureTabId,
         captureWindowId: 0,
-        warning: planningWarning
+        warning: [planningWarning, qualityWarning].filter(Boolean).join(" ")
       })
     };
   } catch (error) {
@@ -888,11 +904,78 @@ async function setVideoState(tabId, state) {
   await tabMessage(tabId, { type: "SET_VIDEO_STATE", ...state }).catch(() => {});
 }
 
+// Highest first. "auto" is excluded: pinning to it would leave quality free to drop mid-run.
+const YOUTUBE_QUALITY_PREFERENCE = Object.freeze([
+  "highres", "hd4320", "hd2880", "hd2160", "hd1440",
+  "hd1080", "hd720", "large", "medium", "small", "tiny"
+]);
+
+// The embed capture tab used to make no quality request at all and rely on the player's adaptive
+// choice, which follows bandwidth and can quietly settle for 360p part way through a run. This is the
+// same preference logic the watch backend uses, injected into the framed player's own world. Unlike
+// the watch backend there is nothing to restore afterwards, because the capture tab is temporary and
+// closed when the run ends. The whole request is best effort: a refused injection must never take the
+// run down, so it degrades to "no pin" and the caller reports it as a warning.
+async function prepareEmbedQuality(tabId) {
+  // allFrames cannot be used here. The capture tab's top frame is a hosted page the extension has no
+  // host permission for, and chrome.scripting throws outright rather than skipping it, so the
+  // injection is aimed at the one frame that owns the player.
+  const frameId = embedFrameIds.get(tabId);
+  if (!Number.isInteger(frameId)) return null;
+  const execution = await chrome.scripting.executeScript({
+    target: { tabId, frameIds: [frameId] },
+    world: "MAIN",
+    args: [YOUTUBE_QUALITY_PREFERENCE],
+    func: async (qualityPreference) => {
+      const player = document.querySelector("#movie_player");
+      const video = document.querySelector("video.html5-main-video, video");
+      if (!player || !video) return null;
+      const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const available = [...(player.getAvailableQualityLevels?.() || [])]
+        .map(String)
+        .filter((quality) => quality && quality !== "auto");
+      const requested = qualityPreference.find((quality) => available.includes(quality))
+        || available[0]
+        || "";
+      if (!requested) {
+        return { requested, settled: false, available, videoHeight: video.videoHeight };
+      }
+      try {
+        player.setPlaybackQualityRange?.(requested, requested);
+      } catch {
+        // Older players expose only setPlaybackQuality.
+      }
+      player.setPlaybackQuality?.(requested);
+      let settled = false;
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline) {
+        await wait(250);
+        if (String(player.getPlaybackQuality?.() || "") === requested
+          && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+          settled = true;
+          await wait(500);
+          break;
+        }
+      }
+      return {
+        requested,
+        settled,
+        current: String(player.getPlaybackQuality?.() || ""),
+        available,
+        videoWidth: video.videoWidth,
+        videoHeight: video.videoHeight
+      };
+    }
+  }).catch(() => null);
+  return execution?.[0]?.result ?? null;
+}
+
 async function prepareYouTubeVisuals(tabId) {
   const execution = await chrome.scripting.executeScript({
     target: { tabId },
     world: "MAIN",
-    func: async () => {
+    args: [YOUTUBE_QUALITY_PREFERENCE],
+    func: async (qualityPreference) => {
       const player = document.querySelector("#movie_player");
       const video = document.querySelector("video.html5-main-video, video");
       if (!player || !video) throw new Error("The YouTube player is unavailable.");
@@ -920,11 +1003,7 @@ async function prepareYouTubeVisuals(tabId) {
       const availableQualities = [...(player.getAvailableQualityLevels?.() || [])]
         .map(String)
         .filter((quality) => quality && quality !== "auto");
-      const preference = [
-        "highres", "hd4320", "hd2880", "hd2160", "hd1440",
-        "hd1080", "hd720", "large", "medium", "small", "tiny"
-      ];
-      const requestedQuality = preference.find((quality) => availableQualities.includes(quality))
+      const requestedQuality = qualityPreference.find((quality) => availableQualities.includes(quality))
         || availableQualities[0]
         || "";
       if (requestedQuality) {
