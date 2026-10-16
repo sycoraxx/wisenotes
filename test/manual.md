@@ -18,7 +18,7 @@ Use a fresh Chrome profile when testing permissions and first-run behavior. Neve
 - Human English, automatic English, and translated English all present: human English is selected.
 - Captions disabled: the popup reports a useful failure.
 - Unsupported non-Indic captions with no English translation or readable panel fallback: the popup reports that supported captions are unavailable.
-- Force native Indic retrieval and every offered English translation request to fail: confirm a useful caption error. Force Sarvam translation to return 429: originals and completed English batches remain saved and Resume completes only unfinished segments.
+- Force native Indic retrieval and every offered English translation request to fail: confirm a useful caption error. Force Sarvam translation to return 429: originals and completed English segments remain saved and Resume completes only unfinished segments.
 - Force the player-response path to fail and verify transcript-panel scraping. Indic or Romanized Indic panel text must be detected and translated rather than assumed English.
 - On a lecture whose captions repeat lines across rolling JSON3 events, confirm the final prompt lists each caption line only once.
 
@@ -68,7 +68,8 @@ Test the two target formats first and treat them as acceptance-critical: a chalk
 - Confirm the status route is polled until completed, then results are fetched using `format=md`.
 - Test equations, code indentation, and tables. Confirm original OCR Markdown is kept verbatim, an English translation is attached, and unknown confidence remains null.
 - Test an Indic board during an English-captioned lecture. Set Board and slide language appropriately; OCR must use that source language and the resulting prose must become English.
-- Translate an Indic paragraph around code fences and math. Protected code/math bytes, order, and caption boundaries must survive; intentional token corruption or untranslated output must fail visibly.
+- Translate an Indic paragraph around code fences and math. Protected code/math bytes and order must survive; inspect translation requests to confirm no protected bytes or replacement markers are sent. Caption timestamps and boundaries must stay local even if the provider flattens line breaks. Untranslated output must fail visibly.
+- Resume a 0.5.0 caption-boundary error after updating: completed caption segments are retained, and unfinished captions use marker-free translation. A saved raw OCR result with a legacy translation checkpoint is translated again without creating another OCR job.
 - Interrupt after OCR succeeds but during translation. Resume must use saved raw OCR and completed translation chunks without creating another OCR job.
 - Test a diagram with labels: the prompt must disclose missing geometry and must not guess invisible relationships from captions.
 - Make every OCR result blank; confirm no transcript-only prompt is produced.

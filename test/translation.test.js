@@ -125,25 +125,40 @@ test("long OCR prose is chunked below the provider limit while retaining every s
   assert.equal(result.text, translateHindi(text));
 });
 
-test("chunking preserves Unicode pairs and never splits an opaque protected marker", () => {
-  const text = "a".repeat(1995) + "ZXQWNLITERAL0QXZ" + "🧠".repeat(1200);
+test("chunking preserves Unicode pairs and every source character", () => {
+  const text = "a".repeat(1995) + "🧠".repeat(1200);
   const chunks = splitTranslationText(text);
   assert.equal(chunks.join(""), text);
   assert.ok(chunks.every((chunk) => chunk.length <= 2000));
-  assert.ok(chunks.some((chunk) => chunk.includes("ZXQWNLITERAL0QXZ")));
   assert.ok(chunks.every((chunk) => !/[\uD800-\uDBFF]$/.test(chunk)));
 });
 
-test("modified or duplicated protected tokens fail instead of corrupting evidence", async () => {
-  for (const corrupt of [
-    (input) => input.replace(/ZXQWNLITERAL\d+QXZ/g, ""),
-    (input) => input.replace(/(ZXQWNLITERAL\d+QXZ)/g, "$1 $1")
-  ]) {
-    await assert.rejects(translateTextToEnglish({
-      ...options, text: "नमस्ते $x=1$",
-      fetchImpl: async (_url, init) => response({ translated_text: corrupt(translateHindi(JSON.parse(init.body).input)) })
-    }), /protected equation/);
-  }
+test("regression: plain English output needs no protected markers or caption boundaries", async () => {
+  const segments = [{ start: 1.25, duration: 2.3, text: "नमस्ते" }];
+  const result = await translateTranscriptToEnglish({
+    ...options, segments,
+    fetchImpl: async (_url, init) => {
+      assert.equal(JSON.parse(init.body).input, "नमस्ते");
+      return response({ translated_text: "Hello" });
+    }
+  });
+  assert.deepEqual(result.segments, [{ ...segments[0], text: "Hello" }]);
+});
+
+test("protected OCR evidence and replacement markers never reach the translation service", async () => {
+  const text = 'नमस्ते $x=1$ दुनिया\n```py\nprint("नमस्ते")\n```\nनमस्ते';
+  const inputs = [];
+  const result = await translateTextToEnglish({
+    ...options, text,
+    fetchImpl: async (_url, init) => {
+      const { input } = JSON.parse(init.body);
+      inputs.push(input);
+      assert.doesNotMatch(input, /ZXQWNLITERAL|WNSEG|\$|```|print/);
+      return translator(input);
+    }
+  });
+  assert.deepEqual(inputs, ["नमस्ते", "दुनिया", "नमस्ते"]);
+  assert.equal(result.text, 'Hello $x=1$ world\n```py\nprint("नमस्ते")\n```\nHello');
 });
 
 test("untranslated Indic output is rejected", async () => {
@@ -152,18 +167,19 @@ test("untranslated Indic output is rejected", async () => {
   }), /left Indic prose untranslated/);
 });
 
-test("translation cannot reverse the visual order of two equations", async () => {
-  await assert.rejects(translateTextToEnglish({
+test("equations retain exact bytes and order without trusting provider formatting", async () => {
+  const result = await translateTextToEnglish({
     ...options, text: "नमस्ते $x=1$ दुनिया $y=2$",
     fetchImpl: async (_url, init) => {
-      const input = translateHindi(JSON.parse(init.body).input);
-      const markers = [...input.matchAll(/ZXQWNLITERAL\d+QXZ/g)].map((match) => match[0]);
-      return response({ translated_text: input.replaceAll(/ZXQWNLITERAL\d+QXZ/g, () => markers.pop()) });
+      const { input } = JSON.parse(init.body);
+      assert.ok(input === "नमस्ते" || input === "दुनिया");
+      return response({ translated_text: `  ${translateHindi(input)}  ` });
     }
-  }), /reordered protected equations/);
+  });
+  assert.equal(result.text, "Hello $x=1$ world $y=2$");
 });
 
-test("caption batches preserve exact timestamps, count, and order", async () => {
+test("individual caption translations preserve exact timestamps, count, and order", async () => {
   const segments = Array.from({ length: 80 }, (_, index) => ({ start: index * 2.37, text: "नमस्ते दुनिया" }));
   const result = await translateTranscriptToEnglish({
     ...options, segments,
@@ -172,7 +188,7 @@ test("caption batches preserve exact timestamps, count, and order", async () => 
   assert.deepEqual(result.segments, segments.map((segment) => ({ ...segment, text: "Hello world" })));
 });
 
-test("caption translation resumes at the first unfinished batch after 429", async () => {
+test("caption translation resumes at the first unfinished segment after 429", async () => {
   const segments = Array.from({ length: 3 }, (_, start) => ({ start, text: "नमस्ते ".repeat(180) }));
   let completedSegments = [];
   let calls = 0;
@@ -190,6 +206,56 @@ test("caption translation resumes at the first unfinished batch after 429", asyn
   });
   assert.equal(resumedCalls, 2);
   assert.equal(result.segments.length, 3);
+});
+
+test("v0.5.0 completed captions resume with marker-free requests", async () => {
+  const segments = [{ start: 1, text: "नमस्ते" }, { start: 3.75, text: "दुनिया" }];
+  const completedSegments = [{ start: 1, text: "Hello" }];
+  const inputs = [];
+  const result = await translateTranscriptToEnglish({
+    ...options, segments, completedSegments,
+    fetchImpl: async (_url, init) => {
+      const { input } = JSON.parse(init.body);
+      inputs.push(input);
+      return translator(input);
+    }
+  });
+  assert.deepEqual(inputs, ["दुनिया"]);
+  assert.deepEqual(result.segments, [completedSegments[0], { start: 3.75, text: "world" }]);
+});
+
+test("legacy masked OCR checkpoints are not mistaken for new local-only parts", async () => {
+  const result = await translateTextToEnglish({
+    ...options, text: "नमस्ते $x=1$ दुनिया",
+    checkpoint: { sourceLanguageCode: "hi-IN", completedChunks: ["Hello ZXQWNLITERAL0QXZ"] },
+    fetchImpl: async (_url, init) => translator(JSON.parse(init.body).input)
+  });
+  assert.equal(result.text, "Hello $x=1$ world");
+});
+
+test("OCR translation resumes local-only parts without repeating translated prose", async () => {
+  const text = "नमस्ते $x=1$ दुनिया";
+  let checkpoint;
+  let calls = 0;
+  await assert.rejects(translateTextToEnglish({
+    ...options, text, onProgress: async (value) => { checkpoint = value; },
+    fetchImpl: async (_url, init) => ++calls === 2
+      ? { ok: false, status: 429, headers: { get: () => "60" } }
+      : translator(JSON.parse(init.body).input)
+  }), (error) => error.status === 429);
+  assert.equal(checkpoint.version, 2);
+  assert.deepEqual(checkpoint.completedChunks, ["Hello ", "$x=1$"]);
+  const inputs = [];
+  const result = await translateTextToEnglish({
+    ...options, text, checkpoint,
+    fetchImpl: async (_url, init) => {
+      const { input } = JSON.parse(init.body);
+      inputs.push(input);
+      return translator(input);
+    }
+  });
+  assert.deepEqual(inputs, ["दुनिया"]);
+  assert.equal(result.text, "Hello $x=1$ world");
 });
 
 test("OCR translation resumes completed text chunks without repeating them", async () => {

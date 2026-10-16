@@ -85,7 +85,7 @@ The selected-frame budget is `0.6 × lecture minutes`, rounded up: 18 frames for
 
 WiseNotes prefers human-written English captions, then automatic English. If no direct English track can be retrieved, it uses native captions in one of Sarvam Translate’s 22 supported Indic languages and translates them to English. YouTube-generated English translations remain a fallback for other available tracks.
 
-The original captions stay saved locally. English translation is batched below the provider’s 2,000-character input limit, preserves each timestamp, and checkpoints completed segments. Transcript-panel fallback text is language-detected before planning. The final prompt requires English titles, explanations, headings, and labels while preserving literal code and mathematics.
+The original captions stay saved locally. Each caption is translated separately below the provider’s 2,000-character input limit; timestamps and boundaries stay local, and completed segments are checkpointed. This uses more requests than a combined batch, but does not depend on the translation model preserving special markers. Transcript-panel fallback text is language-detected before planning. The final prompt requires English titles, explanations, headings, and labels while preserving literal code and mathematics.
 
 It normally downloads the complete timestamped track in one response. Transcript-panel scraping is a compatibility fallback.
 
