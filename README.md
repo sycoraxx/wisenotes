@@ -14,6 +14,16 @@ No WiseNotes subscription, telemetry, or server. Bring a Sarvam API key with Cha
 
 [Download the latest release](https://github.com/sycoraxx/wisenotes/releases/latest) · [Read the privacy summary](PRIVACY.md) · [See the architecture](PROJECT.md)
 
+## Powered by Sarvam
+
+WiseNotes has replaced its Gemini integration with Sarvam APIs. No Gemini API key or Google AI Studio setup is required.
+
+- **Planning and language detection:** `sarvam-105b` through Sarvam Chat Completions.
+- **Screenshot OCR:** Sarvam Document AI (Vision OCR) reads selected lecture frames.
+- **English translation:** `sarvam-translate:v1` translates supported Indic captions and OCR prose while timestamps, code, and equations are preserved locally.
+
+One Sarvam API key is used for these services. Your account needs Chat Completions, Document AI, and Text Translation access, plus sufficient Sarvam credits. The final notes are still generated in the LLM you choose after copying the universal prompt.
+
 ## Built for the moments transcripts lose
 
 | Lecture | What a transcript misses | What WiseNotes captures |
@@ -50,12 +60,18 @@ WiseNotes targets desktop Chrome 116+.
 1. Download and unzip [`wisenotes-<version>.zip`](https://github.com/sycoraxx/wisenotes/releases/latest).
 2. Open `chrome://extensions` and enable **Developer mode**.
 3. Choose **Load unpacked** and select the unzipped folder.
-4. Open WiseNotes settings and save a key from the [Sarvam dashboard](https://indus.sarvam.ai/key-management).
+4. Create an API key in the [Sarvam dashboard](https://indus.sarvam.ai/key-management), confirm access to Chat Completions, Document AI, and Text Translation with available credits, then save the key in WiseNotes settings.
 5. Open a captioned YouTube lecture and choose **Prepare universal prompt**.
 
-Upgrading from 0.3.x: reload the extension in `chrome://extensions` to apply Sarvam host access, then save a Sarvam key. Existing prompts remain available; recoverable captured frames can resume through Sarvam. Saving the new key removes the old provider settings.
-
 Chrome may ask for one extra click on the WiseNotes toolbar icon when the dedicated capture tab opens. A red `1` badge points to it.
+
+### Update without losing saved progress
+
+Copy the contents of the new release folder over your **existing unpacked extension folder**, then open `chrome://extensions` and click **Reload** on WiseNotes. If you loaded the extension from a Git checkout, update that checkout and reload it. Keep the same extension installed; do not uninstall it or clear lecture data. Reopen WiseNotes and choose **Resume** for interrupted work.
+
+Upgrading from the Gemini-based 0.3.x releases also requires a Sarvam API key and the new Sarvam host access. Save the Sarvam key in settings after reloading; an old Gemini key cannot be used with Sarvam. Saving the new key removes the old provider settings. Existing prompts remain available, and recoverable captured frames can resume through Sarvam.
+
+Version 0.5.1 fixes the translation error about a changed equation, code block, or caption boundary. Caption boundaries and protected OCR data now stay local instead of being sent as temporary markers. Completed captions and saved raw OCR remain available on Resume.
 
 ## Use
 
