@@ -4,6 +4,7 @@ import {
   captionJson3Url,
   dedupeSegments,
   englishCaptionCandidates,
+  transcriptCaptionCandidates,
   mergeCaptionSources
 } from "../lib/captions.js";
 
@@ -21,6 +22,24 @@ test("rolling caption events do not repeat the transcript", () => {
     { start: 2, text: "we begin with the derivative" },
     { start: 4, text: "which is defined as the limit" }
   ]);
+});
+
+test("native Indic captions remain usable when YouTube offers no English translation", () => {
+  const [candidate] = transcriptCaptionCandidates([
+    { baseUrl: url("bn"), languageCode: "bn", kind: "asr", isTranslatable: false }
+  ]);
+  assert.equal(candidate.requiresTranslation, true);
+  assert.equal(candidate.sourceLanguageCode, "bn-IN");
+  assert.equal(new URL(captionJson3Url(candidate)).searchParams.has("tlang"), false);
+});
+
+test("direct English remains preferred, then human Indic captions before automatic tracks", () => {
+  const candidates = transcriptCaptionCandidates([
+    { baseUrl: url("hi"), languageCode: "hi", kind: "asr", isTranslatable: true },
+    { baseUrl: url("ta"), languageCode: "ta", kind: "" },
+    { baseUrl: url("en"), languageCode: "en", kind: "" }
+  ]);
+  assert.deepEqual(candidates.slice(0, 3).map((candidate) => candidate.track.languageCode), ["en", "ta", "hi"]);
 });
 
 test("only genuinely identical segments collapse", () => {

@@ -193,4 +193,9 @@ test("the manifest requests only the permissions the extension actually uses", (
     ["activeTab", "clipboardWrite", "offscreen", "scripting", "storage", "tabCapture"]
   );
   assert.ok(!JSON.stringify(manifest).includes('"tabs"'));
+  assert.deepEqual(manifest.host_permissions, [
+    "https://www.youtube.com/*",
+    "https://www.youtube-nocookie.com/*",
+    "https://api.sarvam.ai/*"
+  ]);
 });

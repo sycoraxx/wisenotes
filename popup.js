@@ -10,6 +10,7 @@ let youtubeTab = null;
 let hasKey = false;
 let currentSessionId = null;
 let pollTimer = null;
+let jobRunning = false;
 
 initialize().catch(showTopError);
 
@@ -17,16 +18,16 @@ async function initialize() {
   bindEvents();
   const [activeTabs, storage] = await Promise.all([
     chrome.tabs.query({ active: true, currentWindow: true }),
-    chrome.storage.local.get(["geminiApiKey", "lastSessionId"])
+    chrome.storage.local.get(["sarvamApiKey", "lastSessionId"])
   ]);
   youtubeTab = activeTabs[0] ?? null;
-  hasKey = Boolean(storage.geminiApiKey);
+  hasKey = Boolean(storage.sarvamApiKey);
   currentSessionId = storage.lastSessionId || null;
   renderSetup();
   await request({ type: "PREPARE_CAPTURE" }).catch(() => null);
   if (currentSessionId) {
-    await refreshStatus();
     startPolling();
+    await refreshStatus();
   }
   updateStartButton();
 }
@@ -34,11 +35,17 @@ async function initialize() {
 function bindEvents() {
   elements["settings-button"].addEventListener("click", () => chrome.runtime.openOptionsPage());
   elements["start-button"].addEventListener("click", startJob);
-  elements["cancel-button"].addEventListener("click", cancelJob);
-  elements["resume-button"].addEventListener("click", resumeJob);
-  elements["copy-button"].addEventListener("click", copyPrompt);
-  elements["clear-data"].addEventListener("click", clearData);
-  elements["forget-key"].addEventListener("click", forgetKey);
+  for (const [id, action] of [
+    ["cancel-button", cancelJob], ["resume-button", resumeJob],
+    ["copy-button", copyPrompt], ["clear-data", clearData], ["forget-key", forgetKey]
+  ]) {
+    elements[id].addEventListener("click", async () => {
+      elements[id].disabled = true;
+      try { await action(); }
+      catch (error) { showTopError(error); }
+      finally { elements[id].disabled = false; }
+    });
+  }
 }
 
 function renderSetup() {
@@ -48,7 +55,7 @@ function renderSetup() {
     ? youtubeTab.title?.replace(/\s+-\s+YouTube$/, "") || "Captioned lecture ready"
     : "Open a captioned youtube.com/watch lecture";
   setDot(elements["key-dot"], hasKey);
-  elements["key-status"].textContent = hasKey ? "Stored only in this Chrome profile" : "Add a free-tier API key";
+  elements["key-status"].textContent = hasKey ? "Stored only in this Chrome profile" : "Add a Sarvam API key";
 }
 
 async function startJob() {
@@ -77,7 +84,9 @@ async function refreshStatus() {
   const response = await request({ type: "GET_JOB_STATUS", sessionId: currentSessionId });
   const session = response.session;
   if (!session) return;
+  jobRunning = ["idle", "transcript", "awaiting_capture_window", "capturing", "extracting", "staging"].includes(session.state);
   renderSession(session);
+  updateStartButton();
 }
 
 function renderSession(session) {
@@ -90,13 +99,16 @@ function renderSession(session) {
   const noEnglishCaptions = session.state === "error" && session.errorCode === "NO_ENGLISH_CAPTIONS";
   const translationFailed = session.state === "error" && session.errorCode === "ENGLISH_TRANSLATION_FAILED";
   const captionFailure = noEnglishCaptions || translationFailed;
-  const checkingCaptions = session.state === "transcript" && session.transcriptSegmentCount === 0;
+  const translatingCaptions = session.state === "transcript" && session.transcriptTranslationPending;
+  const checkingCaptions = session.state === "transcript" && session.transcriptSegmentCount === 0 && !translatingCaptions;
   elements["progress-title"].textContent = session.state === "ready"
     ? "Your universal prompt is ready"
     : noEnglishCaptions
-      ? "English captions unavailable"
+      ? "Lecture captions unavailable"
       : translationFailed
         ? "Caption translation failed"
+      : translatingCaptions
+        ? "Preparing English captions"
       : checkingCaptions
         ? "Checking lecture captions"
       : "Working on your lecture";
@@ -106,12 +118,7 @@ function renderSession(session) {
   toggle(elements["cancel-button"], ["transcript", "awaiting_capture_window", "capturing", "extracting", "staging"].includes(session.state));
   toggle(
     elements["resume-button"],
-    session.state === "paused_rate_limit"
-      || (session.state === "error" && (
-        session.transcriptSegmentCount > 0
-        || session.frameCount > 0
-        || session.hasPrompt
-      ))
+    session.canResume
   );
   toggle(elements["copy-button"], session.hasPrompt);
 
@@ -150,12 +157,14 @@ async function copyPrompt() {
 async function clearData() {
   await request({ type: "CLEAR_DATA" });
   currentSessionId = null;
+  jobRunning = false;
   stopPolling();
   hide(elements["progress-card"]);
+  updateStartButton();
 }
 
 async function forgetKey() {
-  await chrome.storage.local.remove(["geminiApiKey"]);
+  await chrome.storage.local.remove(["sarvamApiKey", "geminiApiKey"]);
   hasKey = false;
   renderSetup();
   updateStartButton();
@@ -173,7 +182,7 @@ function stopPolling() {
 
 function updateStartButton() {
   const enabled = isYouTubeWatchUrl(youtubeTab?.url)
-    && hasKey;
+    && hasKey && !jobRunning;
   elements["start-button"].disabled = !enabled;
 }
 

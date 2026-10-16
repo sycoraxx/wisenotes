@@ -37,11 +37,38 @@ test("synthesis prompt makes frame evidence authoritative", () => {
       useful: true
     }]
   });
-  assert.match(prompt, /Frame extractions are the ground truth/);
+  assert.match(prompt, /Frame extractions are the visual evidence/);
   assert.match(prompt, /visual ordering/);
   assert.match(prompt, /The slide defines an eigenvector/);
   assert.match(prompt, /A v =/);
   assert.match(prompt, /Linear Algebra\.tex/);
   assert.match(prompt, /interface supports named files or artifacts/);
   assert.doesNotMatch(prompt, /Claude/i);
+});
+
+test("OCR evidence remains verbatim and its confidence and geometry limits are disclosed", () => {
+  const markdown = "\\[x = \\frac{1}{2}\\]\n```py\nif x:\n    print(x)\n```";
+  const prompt = buildSynthesisPrompt({
+    title: "Board", transcript: [], extractions: [{
+      t: 12, evidenceSource: "sarvam-ocr", ocrMarkdown: markdown,
+      visibleText: markdown, confidence: null, useful: true
+    }]
+  });
+  const evidence = JSON.parse(prompt.split("<FRAME_EXTRACTIONS>\n")[1].split("\n</FRAME_EXTRACTIONS>")[0]);
+  assert.equal(evidence.ocrMarkdown, markdown);
+  assert.equal(evidence.confidence, null);
+  assert.match(prompt, /machine readings, not verified transcriptions/);
+  assert.match(prompt, /Never invent a diagram/);
+});
+
+test("Indic evidence has an English rendering and the final document explicitly requires English", () => {
+  const prompt = buildSynthesisPrompt({
+    title: "गणित", transcript: [{ start: 1, text: "We now differentiate." }],
+    extractions: [{ t: 2, ocrMarkdown: "अवकलज $x^2$", englishOcrMarkdown: "Derivative $x^2$", ocrSourceLanguageCode: "hi-IN", useful: true }]
+  });
+  assert.match(prompt, /Write the title, headings, explanations, table labels, and recap in English/);
+  assert.match(prompt, /Translate any remaining Indic prose faithfully/);
+  assert.match(prompt, /Derivative \$x\^2\$/);
+  assert.match(prompt, /अवकलज/);
+  assert.match(prompt, /Translation is not additional visual evidence/);
 });

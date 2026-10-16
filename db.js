@@ -1,3 +1,5 @@
+import { applySessionPatch } from "./lib/state.js";
+
 const DB_NAME = "wisenotes";
 const DB_VERSION = 1;
 const STORE = "sessions";
@@ -40,7 +42,7 @@ export async function patchSession(sessionId, patch) {
   const store = transaction.objectStore(STORE);
   const current = await requestPromise(store.get(sessionId));
   if (!current) throw new Error(`Unknown WiseNotes session: ${sessionId}`);
-  const next = { ...current, ...patch, updatedAt: Date.now() };
+  const next = applySessionPatch(current, patch);
   await requestPromise(store.put(next));
   await transactionPromise(transaction);
   return next;

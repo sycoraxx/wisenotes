@@ -6,7 +6,7 @@ This document explains the decisions behind the public beta. Start with the [REA
 
 WiseNotes is multimodal or it stops.
 
-- Frames govern equations, notation, diagrams, tables, slides, and code.
+- OCR from captured frames supplies evidence for equations, notation, tables, slides, and code. OCR uncertainty and missing diagram geometry remain explicit.
 - Captions govern narration, order, and timing.
 - Conflicts resolve in favor of visual evidence.
 - Failed visual capture or extraction must never quietly become transcript-only notes.
@@ -18,12 +18,14 @@ The acceptance-critical formats are derivation-heavy STEM and live coding. Optim
 ```text
 Popup
   └─ service worker
-      ├─ snapshot playback + fetch captions
-      ├─ Gemini Flash planner → semantic visual windows
+      ├─ snapshot playback + fetch English or native Indic captions
+      ├─ Sarvam Translate → timestamp-aligned English captions
+      ├─ Sarvam-105B planner → semantic visual windows
       ├─ capture tab → YouTube embed → tabCapture stream
       ├─ offscreen analysis → hashes, edges, blur, scene boundaries
       ├─ peak selection → full-resolution recapture of winners
-      ├─ Gemini Flash-Lite → structured visual evidence
+      ├─ Sarvam Vision Document AI → raw OCR Markdown
+      ├─ Sarvam Translate → English OCR prose + original evidence
       ├─ local prompt builder → transcript + evidence
       └─ explicit Copy action → user-selected LLM
 ```
@@ -66,28 +68,42 @@ Semantic timing narrows the search; pixels make the final decision.
 
 Only final winners consume image-model quota. The budget is `ceil(durationMinutes × 0.6)` with a minimum of one and no ceiling.
 
-## Gemini boundaries
+## Sarvam boundaries
 
 | Stage | Input | Output | Failure behavior |
 |---|---|---|---|
-| Timestamp planning | Complete timestamped transcript | Bounded visual windows | Known-good model first; 20s discovery and 120s generation bounds; `429` pauses |
-| Frame extraction | Up to 16 JPEGs, each paired with ±30s captions | Validated JSON visual evidence | 120s timeout, up to 3 transient retries, batch checkpointing |
+| Timestamp planning | Complete timestamped transcript | Strict JSON visual windows | 120s per attempt; up to 3 transient attempts; 429 pauses |
+| Frame OCR | One cropped JPEG per job, mixed printed/handwritten content, source language | Markdown returned by the job results endpoint | Persist job ID before polling; 5s poll cadence; 10-minute polling deadline |
 
-Planning tries the last successful current-generation model before it depends on the catalog, then discovers explicit stable `gemini-X.Y-flash` and `gemini-X.Y-flash-lite` models exposed to the user’s key. Legacy 2.x candidates are excluded from automatic planning because Google limits their availability for new projects even when they appear in catalog results. On a cold start where discovery itself is unavailable, WiseNotes directly tries a current stable full-Flash ladder newest-first, followed by the configured stable Lite model. Aliases, previews, and specialized variants are rejected.
+The planner uses Sarvam’s flagship `sarvam-105b` on `POST /v1/chat/completions`, with `response_format: json_schema`. Low reasoning effort and a 4096-token completion budget support Starter accounts. Truncated or malformed plans are rejected. Its context window is 128K tokens; oversized transcripts remain saved if the provider rejects them.
 
-Frame extraction uses the configured Lite model. Its schema preserves visible text, code, diagrams, equation order, pdflatex-compatible notation, confidence, and ambiguous glyphs. Both prompts delimit lecture material as untrusted data and explicitly forbid following instructions inside it.
+Sarvam Vision reads pixels through `POST /doc-ai/v1/job/digitise`. The endpoint selects its supported Vision model; there is no invented chat-model OCR endpoint or manually pinned Vision version. A repeatable multipart `file` part contains one JPEG, with the caption-derived or user-selected `language` and `content_type=mixed`. After `GET /doc-ai/v1/job/{id}/status` reports completion, `GET /doc-ai/v1/job/{id}/results?format=md` returns one document/page. This avoids ZIP downloads and additional storage-host permissions.
 
-Catalog requests time out after 20 seconds. Planner generation and frame-extraction attempts time out after 120 seconds and retry only transient failures.
+One frame per job gives an unambiguous timestamp-to-page mapping. Unexpected page counts, failed jobs, and partially completed jobs stop the run. The raw Markdown is retained verbatim; WiseNotes does not invent equation records, diagram descriptions, or confidence scores. The final prompt explains OCR limitations and forbids reconstructing invisible symbols or diagram geometry from captions.
+
+Each HTTP attempt includes response-body reading in its timeout. GET status/results and planning requests retry transient failures up to three attempts. OCR creation is never automatically retried because a lost response could have created a charged job. If no job ID was received, a user-triggered Resume may submit a new job. Known job IDs are reused on Resume. A short-lived extension-API timer keeps the service worker active during bounded provider calls and is cleared when they finish.
+
+API references: [Chat Completions V1](https://docs.sarvam.ai/api-reference/chat/chat-completions-v1), [Digitise](https://docs.sarvam.ai/api-reference/doc-ai/job/digitise), [Job results](https://docs.sarvam.ai/api-reference/doc-ai/job/results).
 
 ## Captions
 
-Selection order is human English → automatic English → translated English. Player-response metadata from live and initial responses is merged before choosing a track. Empty or malformed YouTube responses receive one bounded retry; `429` never triggers an immediate retry. The transcript panel is the compatibility fallback when appropriate.
+Selection order is human English → automatic English → native Indic captions → YouTube-translated English. Native Indic captions do not require YouTube to expose an English translation target. Player-response metadata from live and initial responses is merged before choosing a track. Empty or malformed YouTube responses receive one bounded retry; `429` never triggers an immediate retry. The transcript panel is the compatibility fallback when appropriate.
 
 These are YouTube player interfaces, not stable public APIs. Keep them isolated and expect maintenance.
 
+## English normalization
+
+Native captions and OCR prose use `/translate` with `sarvam-translate:v1` and target `en-IN`. The model supports all 22 scheduled Indic languages. Known caption language codes are normalized, including YouTube’s `or` to Sarvam’s `od-IN`. Unknown panel/OCR prose is classified by Sarvam-105B before translation, including Romanized Indic text. Existing English captions skip translation requests.
+
+Translation inputs are split below 2,000 characters. Caption boundaries are protected and checked so neither order nor timestamps can change. OCR translation masks code fences, inline code, LaTeX math, URLs, and HTML tags; every token must survive once and in order before its original bytes are restored. Empty results, changed protected data, and remaining Indic prose fail visibly. Original OCR and English OCR are both retained; translation cannot fix uncertain visual readings.
+
+Caption normalization runs in the `transcript` state and persists original captions, completed English segments, and the pending flag. OCR results are saved before translation, with completed translation chunks. Resume can translate a saved OCR result without repeating the OCR job. The default OCR language follows available source captions; settings allow a different board/slide language. Final synthesis explicitly requires English prose, titles, headings, and labels. Uncaptioned audio transcription is outside this version’s pipeline.
+
+References: [Sarvam Translate](https://docs.sarvam.ai/api/getting-started/models/sarvam-translate), [Translation API](https://docs.sarvam.ai/api-reference/text/translate-text).
+
 ## State and recovery
 
-IndexedDB stores each session by UUID. Checkpoints occur after transcript retrieval, local capture, and every Gemini batch.
+IndexedDB stores each session by UUID. Checkpoints occur after transcript retrieval, local capture, and every OCR job creation and completed frame.
 
 ```text
 idle → transcript → awaiting_capture_window → capturing → extracting → staging → ready
@@ -95,14 +111,16 @@ idle → transcript → awaiting_capture_window → capturing → extracting →
 any active state ───────────────────────────────────► cancelled | error
 ```
 
-- Raw JPEGs remain only while an unfinished extraction may need them.
-- Completed batches resume at the first unprocessed frame.
-- Service-worker interruption during capture requires a new capture because the media stream and metadata scouts are ephemeral.
+- Raw JPEGs remain until the final prompt is saved atomically with the ready state.
+- Completed frames resume at the first unprocessed frame, reusing its persisted OCR job ID when available.
+- Completed OCR can finish the local prompt without a network request or API key.
+- Legacy session fields are mapped to provider-neutral checkpoints; old API keys are never reused as Sarvam keys.
+- Service-worker interruption during capture stops the stream, closes owned tabs, and restores the lecture. A new capture is required because metadata scouts are ephemeral.
 - Cancellation always attempts to stop capture, close owned tabs, and restore the lecture.
 
 ## Security and privacy boundaries
 
-- Gemini credentials stay in Chrome local extension storage.
+- Sarvam credentials stay in Chrome local extension storage. Only `api.sarvam.ai` receives the subscription-key header.
 - The service worker never logs the key or lecture data.
 - The final prompt is copied only after an explicit user action.
 - The static GitHub Pages request exposes the YouTube video ID to GitHub infrastructure; this is disclosed in [PRIVACY.md](PRIVACY.md).
@@ -111,4 +129,4 @@ any active state ─────────────────────
 
 ## Compatibility target
 
-Desktop Chrome 116+, Manifest V3, captioned YouTube lectures with direct or translated English captions, and unpacked GitHub distribution. Other Chromium browsers may work but are not acceptance targets.
+Desktop Chrome 116+, Manifest V3, captioned YouTube lectures with English or supported native Indic captions (or YouTube-translated English), and unpacked GitHub distribution. Other Chromium browsers may work but are not acceptance targets.

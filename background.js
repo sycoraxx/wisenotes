@@ -14,32 +14,25 @@ import {
   selectFrames,
   selectPeakStates
 } from "./lib/frames.js";
-import {
-  DEFAULT_MODEL,
-  GEMINI_BATCH_SIZE,
-  GeminiError,
-  extractFrameBatch,
-  hasUsefulVisualEvidence,
-  takeGeminiBatch
-} from "./lib/gemini.js";
+import { SarvamError, SARVAM_LLM_MODEL, abortableDelay } from "./lib/sarvam.js";
+import { OCR_MODEL_LABEL, readFrameWithOcr, hasUsefulVisualEvidence } from "./lib/ocr.js";
 import { buildSynthesisPrompt } from "./lib/prompt.js";
-import {
-  AUTO_PLANNER_MODEL,
-  STABLE_PLANNER_FALLBACK_MODELS,
-  inferFrameTriggers
-} from "./lib/planner.js";
-import { JOB_STATES, assertTransition, publicSession } from "./lib/state.js";
+import { inferFrameTriggers } from "./lib/planner.js";
+import { translateTranscriptToEnglish, translateTextToEnglish } from "./lib/translation.js";
+import { normalizeLanguageCode } from "./lib/languages.js";
+import { JOB_STATES, assertTransition, publicSession, migrateSessionToSarvam } from "./lib/state.js";
 import { buildPlayerPageUrl, durationMatches, paceDelayMs } from "./lib/embed.js";
 import {
   captionJson3Url,
   dedupeSegments,
-  englishCaptionCandidates,
+  transcriptCaptionCandidates,
   mergeCaptionSources
 } from "./lib/captions.js";
 
 const OFFSCREEN_PATH = "offscreen.html";
 const AD_WAIT_TIMEOUT_MS = 3 * 60 * 1000;
 const FRAME_JPEG_QUALITY = 0.9;
+const OCR_LIMITATION_WARNING = "OCR can miss faint handwriting and diagram geometry. Review the generated notes against the lecture.";
 // Capture runs through a dedicated tab that loads the YouTube embed player, because ads are far
 // less likely to play for an embedded player than for the watch page. Users without Premium
 // are therefore not stalled mid-capture. The user's own watch tab is only used for the
@@ -50,6 +43,8 @@ const CAPTURE_TAB_PREPARE_TIMEOUT_MS = 20000;
 // the lecture tab the old way.
 const CAPTURE_TAB_INVOKE_TIMEOUT_MS = 60000;
 const activeRuns = new Map();
+let jobLaunchPending = false;
+const cleanupRuns = new Map();
 let lastVisibleCaptureAt = 0;
 
 if (chrome.storage.local.setAccessLevel) {
@@ -82,7 +77,7 @@ async function handleMessage(message = {}) {
       await ensureOffscreen();
       return {};
     case "START_JOB":
-      return startJob(message);
+      return withJobLaunch(() => startJob(message));
     case "GET_JOB_STATUS": {
       let session = message.sessionId ? await getSession(message.sessionId) : await getLatestSession();
       session = await recoverInterruptedSession(session);
@@ -96,15 +91,38 @@ async function handleMessage(message = {}) {
     case "CANCEL_JOB":
       return cancelJob(message.sessionId);
     case "RESUME_JOB":
-      return resumeJob(message.sessionId);
+      return withJobLaunch(() => resumeJob(message.sessionId));
     case "CLEAR_DATA":
-      if (activeRuns.size) throw new Error("Cancel the active lecture before clearing saved data.");
-      await stopCaptureAndRestore(await getLatestSession()).catch(() => {});
-      await clearSessions();
-      await chrome.storage.local.remove("lastSessionId");
-      return {};
+      if (activeRuns.size || jobLaunchPending) throw new Error("Cancel the active lecture before clearing saved data.");
+      return withJobLaunch(async () => {
+        await stopCaptureAndRestore(await getLatestSession()).catch(() => {});
+        await clearSessions();
+        await chrome.storage.local.remove("lastSessionId");
+        return {};
+      });
     default:
       throw new Error(`Unknown WiseNotes message: ${message.type || "missing type"}`);
+  }
+}
+
+async function withJobLaunch(launch) {
+  if (activeRuns.size || jobLaunchPending) throw new Error("A WiseNotes lecture is already running.");
+  jobLaunchPending = true;
+  try {
+    return await launch();
+  } finally {
+    jobLaunchPending = false;
+  }
+}
+
+// A reasoning request can outlive Chrome's 30-second idle timer after the popup closes.
+// Keep the worker active only for the bounded provider operation, then release the timer.
+async function withProviderActivity(operation) {
+  const timer = setInterval(() => chrome.runtime.getPlatformInfo().catch(() => {}), 20_000);
+  try {
+    return await operation();
+  } finally {
+    clearInterval(timer);
   }
 }
 
@@ -114,11 +132,9 @@ async function startJob({ youtubeTabId }) {
   if (!Number.isInteger(ids.youtubeTabId)) throw new Error("Open the YouTube lecture you want to process.");
 
   const settings = await chrome.storage.local.get([
-    "geminiApiKey",
-    "geminiModel",
-    "lastSuccessfulPlannerModel"
+    "sarvamApiKey", "ocrLanguageCode"
   ]);
-  if (!settings.geminiApiKey) throw new Error("Add your Gemini API key in WiseNotes settings first.");
+  if (!settings.sarvamApiKey) throw new Error("Add your Sarvam API key in WiseNotes settings first.");
   const youtubeTab = await chrome.tabs.get(ids.youtubeTabId);
   if (!isYouTubeWatchUrl(youtubeTab.url)) throw new Error("Start WiseNotes from a YouTube watch page.");
 
@@ -146,18 +162,23 @@ async function startJob({ youtubeTabId }) {
     state: JOB_STATES.IDLE,
     progress: { current: 0, total: 1, percent: 0, message: "Starting WiseNotes…" },
     transcript: [],
+    sourceTranscript: [],
+    sourceLanguageCode: "",
+    transcriptTranslationPending: false,
+    ocrLanguageCode: normalizeLanguageCode(settings.ocrLanguageCode),
     frames: [],
-    geminiExtractions: [],
-    nextGeminiFrameIndex: 0,
-    model: settings.geminiModel || DEFAULT_MODEL,
-    plannerModel: AUTO_PLANNER_MODEL,
+    frameExtractions: [],
+    nextFrameIndex: 0,
+    provider: "sarvam",
+    model: SARVAM_LLM_MODEL,
+    ocrModel: OCR_MODEL_LABEL,
+    plannerModel: SARVAM_LLM_MODEL,
     frameTriggers: [],
     planningMode: "",
     planningPending: false,
-    preferredPlannerModel: settings.lastSuccessfulPlannerModel || "",
     finalPrompt: "",
     deliveryMode: "copy",
-    warning: "",
+    warning: OCR_LIMITATION_WARNING,
     error: "",
     errorCode: "",
     skippedCaptures: 0
@@ -167,7 +188,7 @@ async function startJob({ youtubeTabId }) {
 
   const controller = new AbortController();
   activeRuns.set(session.sessionId, controller);
-  runNewJob(session.sessionId, settings.geminiApiKey, controller).finally(() => {
+  runNewJob(session.sessionId, settings.sarvamApiKey, controller).finally(() => {
     activeRuns.delete(session.sessionId);
   });
   return { sessionId: session.sessionId };
@@ -176,18 +197,55 @@ async function startJob({ youtubeTabId }) {
 async function runNewJob(sessionId, apiKey, controller) {
   let session = await getSession(sessionId);
   try {
-    session = await setState(session, JOB_STATES.TRANSCRIPT, "Checking for an English transcript…", 0);
+    session = await setState(session, JOB_STATES.TRANSCRIPT, "Checking lecture captions and language…", 0);
     // Rolling caption events can repeat the same line, which would otherwise show up twice in the
     // final prompt.
-    const transcript = dedupeSegments(await extractTranscript(session.youtubeTabId));
+    const captions = await extractTranscript(session.youtubeTabId, controller.signal);
+    const sourceTranscript = dedupeSegments(captions.segments);
     throwIfAborted(controller.signal);
-    await patchSession(sessionId, { transcript, planningPending: true });
-    await continueFromTranscript(sessionId, apiKey, controller.signal);
+    await patchSession(sessionId, {
+      sourceTranscript,
+      sourceLanguageCode: captions.sourceLanguageCode,
+      ocrLanguageCode: session.ocrLanguageCode || captions.ocrLanguageCode || "",
+      transcriptTranslationPending: true
+    });
+    await continueTranscriptTranslation(sessionId, apiKey, controller.signal);
   } catch (error) {
     await recordRunFailure(sessionId, error);
   } finally {
     await stopCaptureAndRestore(await getSession(sessionId).catch(() => session)).catch(() => {});
   }
+}
+
+async function continueTranscriptTranslation(sessionId, apiKey, signal) {
+  const session = await getSession(sessionId);
+  await updateProgress(sessionId, 2, "Preparing English captions with Sarvam…", session.transcript?.length || 0, session.sourceTranscript.length);
+  const result = await withProviderActivity(() => translateTranscriptToEnglish({
+    apiKey, signal,
+    segments: session.sourceTranscript,
+    sourceLanguageCode: session.sourceLanguageCode,
+    completedSegments: session.transcript || [],
+    onProgress: async ({ segments, sourceLanguageCode }) => {
+      throwIfAborted(signal);
+      await patchSession(sessionId, {
+        transcript: segments, sourceLanguageCode,
+        progress: {
+          current: segments.length, total: session.sourceTranscript.length, percent: 3,
+          message: `Translated ${segments.length} of ${session.sourceTranscript.length} caption segments into English…`
+        }
+      });
+    }
+  }));
+  throwIfAborted(signal);
+  await patchSession(sessionId, {
+    transcript: result.segments,
+    sourceLanguageCode: result.sourceLanguageCode,
+    transcriptLanguageCode: "en-IN",
+    ocrLanguageCode: session.ocrLanguageCode || result.sourceLanguageCode,
+    transcriptTranslationPending: false,
+    planningPending: true
+  });
+  await continueFromTranscript(sessionId, apiKey, signal);
 }
 
 async function continueFromTranscript(sessionId, apiKey, signal) {
@@ -198,25 +256,23 @@ async function continueFromTranscript(sessionId, apiKey, signal) {
   await updateProgress(
     sessionId,
     5,
-    "Selecting an available stable Gemini Flash model for visual planning…",
+    "Sarvam-105B is selecting useful visual moments…",
     0,
     1
   );
 
   let framePlan;
   try {
-    framePlan = await inferFrameTriggers({
+    framePlan = await withProviderActivity(() => inferFrameTriggers({
       apiKey,
       transcript,
       durationSeconds: session.duration,
-      model: AUTO_PLANNER_MODEL,
-      preferredModel: session.preferredPlannerModel,
-      fallbackModels: [...STABLE_PLANNER_FALLBACK_MODELS, session.model, DEFAULT_MODEL],
       signal
-    });
+    }));
   } catch (error) {
     if (error?.name === "AbortError") throw error;
-    if (error instanceof GeminiError && error.status === 429) {
+    if (error instanceof SarvamError && error.status === 429) {
+      throwIfAborted(signal);
       const retryAfter = Math.max(60, error.retryAfterSeconds || 0);
       assertTransition(session.state, JOB_STATES.PAUSED_RATE_LIMIT);
       await patchSession(sessionId, {
@@ -226,30 +282,29 @@ async function continueFromTranscript(sessionId, apiKey, signal) {
         error: error.message,
         progress: {
           ...session.progress,
-          message: `Gemini rate limit reached during timestamp planning. Resume after ${new Date(Date.now() + retryAfter * 1000).toLocaleTimeString()}.`
+          message: `Sarvam rate limit reached during timestamp planning. Resume after ${new Date(Date.now() + retryAfter * 1000).toLocaleTimeString()}.`
         }
       });
       return false;
     }
     throw new Error(
-      `${friendlyError(error)} WiseNotes did not fall back to dense local capture. Your transcript is saved; choose Resume to retry Flash planning.`
+      `${friendlyError(error)} WiseNotes did not fall back to dense local capture. Your transcript is saved; choose Resume to retry Sarvam planning.`
     );
   }
 
   throwIfAborted(signal);
-  await chrome.storage.local.set({ lastSuccessfulPlannerModel: framePlan.model });
   session = await patchSession(sessionId, {
     frameTriggers: framePlan.triggers,
     plannerModel: framePlan.model,
-    preferredPlannerModel: framePlan.model,
     planningMode: "semantic",
     planningPending: false,
-    warning: "",
+    warning: OCR_LIMITATION_WARNING,
     error: "",
     errorCode: ""
   });
 
-  const capture = await prepareCaptureBackend(session, "");
+  const capture = await prepareCaptureBackend(session, session.warning, signal);
+  throwIfAborted(signal);
   session = capture.session;
   session = await setState(
     session,
@@ -259,6 +314,7 @@ async function continueFromTranscript(sessionId, apiKey, signal) {
   );
   const captureResult = await captureFrames(session, transcript, signal, framePlan.triggers);
   await stopCaptureAndRestore(session);
+  throwIfAborted(signal);
   session = await patchSession(sessionId, {
     frames: captureResult.frames,
     skippedCaptures: captureResult.skipped,
@@ -270,8 +326,8 @@ async function continueFromTranscript(sessionId, apiKey, signal) {
     }
   });
 
-  session = await setState(session, JOB_STATES.EXTRACTING, "Gemini is reading the selected frames…", 56);
-  const completed = await runGeminiBatches(sessionId, apiKey, signal);
+  session = await setState(session, JOB_STATES.EXTRACTING, "Sarvam Vision is reading the selected frames…", 56);
+  const completed = await runOcrFrames(sessionId, apiKey, signal);
   if (!completed) return false;
   await finishPrompt(sessionId, signal);
   return true;
@@ -307,7 +363,7 @@ async function captureFrames(session, transcript, signal, plannedTriggers = []) 
   const primaryKeys = new Set(primary.map(frameCandidateKey));
   // Peak candidates are the first reserves. If every peak was selected, retain lower-ranked
   // scout states as a last-resort replacement for a recapture that fails or lands on an ad/
-  // transition. They never consume Gemini quota unless a primary frame could not be recovered.
+  // transition. They never consume Sarvam OCR quota unless a primary frame could not be recovered.
   const reserve = [...peaks, ...scouted]
     .filter((frame) => !primaryKeys.has(frameCandidateKey(frame)))
     .sort((a, b) => frameQuality(b) - frameQuality(a))
@@ -462,64 +518,83 @@ function frameCandidateKey(frame) {
   return `${frame.windowId || "probe"}:${Number(frame.t).toFixed(2)}`;
 }
 
-async function runGeminiBatches(sessionId, apiKey, signal) {
+async function runOcrFrames(sessionId, apiKey, signal) {
   let session = await getSession(sessionId);
   const frames = session.frames ?? [];
-  const existing = session.geminiExtractions ?? [];
-  let nextIndex = Number(session.nextGeminiFrameIndex) || 0;
+  const existing = [...(session.frameExtractions ?? [])];
+  let nextIndex = Number(session.nextFrameIndex) || 0;
 
   while (nextIndex < frames.length) {
     throwIfAborted(signal);
-    const batch = takeGeminiBatch(frames, nextIndex, GEMINI_BATCH_SIZE);
-    if (!batch.length) throw new Error("WiseNotes could not construct the next Gemini frame batch.");
+    const frame = frames[nextIndex];
+    const savedJob = session.activeOcrJob?.frameIndex === nextIndex ? session.activeOcrJob : null;
+    let pending = session.pendingOcrExtraction?.frameIndex === nextIndex ? session.pendingOcrExtraction : null;
+    await updateProgress(sessionId, 56 + Math.round((nextIndex / frames.length) * 34),
+      `Sarvam Vision is reading frame ${nextIndex + 1} of ${frames.length}…`, nextIndex, frames.length);
     try {
-      const output = await extractFrameBatch({
-        apiKey,
-        model: session.model || DEFAULT_MODEL,
-        frames: batch,
-        transcript: session.transcript,
-        signal
-      });
-      existing.push(...output);
-      const completedIndex = nextIndex + batch.length;
-      const percent = 56 + Math.round((completedIndex / frames.length) * 34);
+      let output = pending?.output;
+      if (!output) {
+        output = await withProviderActivity(() => readFrameWithOcr({
+          apiKey, frame, signal, jobId: savedJob?.jobId || "",
+          languageCode: session.ocrLanguageCode || "en-IN",
+          onJobCreated: async (jobId) => {
+            session = await patchSession(sessionId, {
+              activeOcrJob: { frameIndex: nextIndex, jobId }
+            });
+          }
+        }));
+        pending = { frameIndex: nextIndex, output, translationCheckpoint: null };
+        session = await patchSession(sessionId, { pendingOcrExtraction: pending });
+      }
+      await updateProgress(sessionId, 56 + Math.round((nextIndex / frames.length) * 34),
+        `Preparing frame ${nextIndex + 1} of ${frames.length} in English…`, nextIndex, frames.length);
+      const translated = await withProviderActivity(() => translateTextToEnglish({
+        apiKey, signal,
+        text: output.ocrMarkdown || output.visibleText || "",
+        checkpoint: pending.translationCheckpoint,
+        onProgress: async (translationCheckpoint) => {
+          throwIfAborted(signal);
+          pending = { ...pending, translationCheckpoint };
+          session = await patchSession(sessionId, { pendingOcrExtraction: pending });
+        }
+      }));
+      output = {
+        ...output, englishOcrMarkdown: translated.text,
+        ocrSourceLanguageCode: translated.sourceLanguageCode, translationComplete: true
+      };
+      throwIfAborted(signal);
+      existing.push(output);
+      nextIndex += 1;
       session = await patchSession(sessionId, {
-        geminiExtractions: existing,
-        nextGeminiFrameIndex: completedIndex,
+        frameExtractions: existing,
+        nextFrameIndex: nextIndex,
+        activeOcrJob: null,
+        pendingOcrExtraction: null,
+        error: "",
         progress: {
-          current: completedIndex,
-          total: frames.length,
-          percent,
-          message: `Gemini extracted ${completedIndex} of ${frames.length} frames.`
-        },
-        error: ""
+          current: nextIndex, total: frames.length,
+          percent: 56 + Math.round((nextIndex / frames.length) * 34),
+          message: `Sarvam Vision read ${nextIndex} of ${frames.length} frames.`
+        }
       });
     } catch (error) {
-      if (error instanceof GeminiError && error.status === 429) {
-        const retryAfter = Math.max(60, error.retryAfterSeconds || 0);
-        assertTransition(session.state, JOB_STATES.PAUSED_RATE_LIMIT);
+      if (error.ocrJobFailed) await patchSession(sessionId, { activeOcrJob: null });
+      if (error instanceof SarvamError && error.status === 429) {
+        throwIfAborted(signal);
+        const retryAt = Date.now() + Math.max(60, error.retryAfterSeconds || 0) * 1000;
         await patchSession(sessionId, {
-          state: JOB_STATES.PAUSED_RATE_LIMIT,
-          retryAt: Date.now() + retryAfter * 1000,
-          error: error.message,
-          progress: {
-            ...session.progress,
-            message: `Gemini rate limit reached. Resume after ${new Date(Date.now() + retryAfter * 1000).toLocaleTimeString()}.`
-          }
+          state: JOB_STATES.PAUSED_RATE_LIMIT, retryAt, error: error.message,
+          progress: { ...session.progress, message: `Sarvam rate limit reached. Resume after ${new Date(retryAt).toLocaleTimeString()}.` }
         });
         return false;
       }
       throw error;
     }
-    nextIndex += batch.length;
   }
-
   if (!hasUsefulVisualEvidence(existing)) {
-    throw new Error(
-      "Gemini did not extract any usable visual evidence. WiseNotes stopped instead of generating transcript-only notes."
-    );
+    throw new Error("Sarvam OCR did not recover any usable visual text. WiseNotes stopped instead of generating transcript-only notes.");
   }
-  await patchSession(sessionId, { frames: [] });
+  await patchSession(sessionId, { extractionComplete: true });
   return true;
 }
 
@@ -531,14 +606,17 @@ async function finishPrompt(sessionId, signal) {
     title: session.title,
     videoUrl: session.videoUrl,
     transcript: session.transcript,
-    extractions: session.geminiExtractions
+    extractions: session.frameExtractions
   });
-  session = await patchSession(sessionId, { finalPrompt });
   throwIfAborted(signal);
 
   assertTransition(session.state, JOB_STATES.READY);
   await patchSession(sessionId, {
     state: JOB_STATES.READY,
+    finalPrompt,
+    frames: [],
+    activeOcrJob: null,
+    pendingOcrExtraction: null,
     error: "",
     progress: {
       current: 1,
@@ -551,12 +629,13 @@ async function finishPrompt(sessionId, signal) {
 
 async function resumeJob(sessionId) {
   if (activeRuns.size) throw new Error("Another WiseNotes lecture is already running.");
-  const session = await getSession(sessionId);
+  let session = await getSession(sessionId);
   if (!session) throw new Error("That saved WiseNotes session no longer exists.");
   if (![JOB_STATES.PAUSED_RATE_LIMIT, JOB_STATES.ERROR].includes(session.state)) {
     throw new Error("This session does not need to be resumed.");
   }
-  if (session.finalPrompt) {
+  session = await patchSession(sessionId, migrateSessionToSarvam(session));
+  if (session.finalPrompt || session.extractionComplete) {
     const controller = new AbortController();
     activeRuns.set(sessionId, controller);
     finishPrompt(sessionId, controller.signal)
@@ -564,8 +643,19 @@ async function resumeJob(sessionId) {
       .finally(() => activeRuns.delete(sessionId));
     return { sessionId };
   }
-  const { geminiApiKey } = await chrome.storage.local.get("geminiApiKey");
-  if (!geminiApiKey) throw new Error("Add your Gemini API key before resuming.");
+  const { sarvamApiKey } = await chrome.storage.local.get("sarvamApiKey");
+  if (!sarvamApiKey) throw new Error("Add your Sarvam API key before resuming.");
+
+  if (session.transcriptTranslationPending && session.sourceTranscript?.length) {
+    assertTransition(session.state, JOB_STATES.TRANSCRIPT);
+    await patchSession(sessionId, { state: JOB_STATES.TRANSCRIPT, error: "", errorCode: "", retryAt: 0 });
+    const controller = new AbortController();
+    activeRuns.set(sessionId, controller);
+    continueTranscriptTranslation(sessionId, sarvamApiKey, controller.signal)
+      .catch((error) => recordRunFailure(sessionId, error))
+      .finally(() => activeRuns.delete(sessionId));
+    return { sessionId };
+  }
 
   if (session.planningPending && session.transcript?.length) {
     assertTransition(session.state, JOB_STATES.TRANSCRIPT);
@@ -574,11 +664,11 @@ async function resumeJob(sessionId) {
       error: "",
       errorCode: "",
       retryAt: 0,
-      progress: { ...session.progress, message: "Retrying Gemini Flash timestamp planning…" }
+      progress: { ...session.progress, message: "Retrying Sarvam-105B timestamp planning…" }
     });
     const controller = new AbortController();
     activeRuns.set(sessionId, controller);
-    continuePlanning(sessionId, geminiApiKey, controller).finally(() => activeRuns.delete(sessionId));
+    continuePlanning(sessionId, sarvamApiKey, controller).finally(() => activeRuns.delete(sessionId));
     return { sessionId };
   }
 
@@ -589,11 +679,11 @@ async function resumeJob(sessionId) {
     state: JOB_STATES.EXTRACTING,
     error: "",
     retryAt: 0,
-    progress: { ...session.progress, message: "Resuming Gemini frame extraction…" }
+    progress: { ...session.progress, message: "Resuming Sarvam OCR…" }
   });
   const controller = new AbortController();
   activeRuns.set(sessionId, controller);
-  continueExtraction(sessionId, geminiApiKey, controller).finally(() => activeRuns.delete(sessionId));
+  continueExtraction(sessionId, sarvamApiKey, controller).finally(() => activeRuns.delete(sessionId));
   return { sessionId };
 }
 
@@ -609,7 +699,7 @@ async function continuePlanning(sessionId, apiKey, controller) {
 
 async function continueExtraction(sessionId, apiKey, controller) {
   try {
-    const completed = await runGeminiBatches(sessionId, apiKey, controller.signal);
+    const completed = await runOcrFrames(sessionId, apiKey, controller.signal);
     if (completed) await finishPrompt(sessionId, controller.signal);
   } catch (error) {
     await recordRunFailure(sessionId, error);
@@ -634,8 +724,16 @@ async function cancelJob(sessionId) {
 
 async function recordRunFailure(sessionId, error) {
   const session = await getSession(sessionId).catch(() => null);
-  if (!session || session.state === JOB_STATES.PAUSED_RATE_LIMIT) return;
+  if (!session || [JOB_STATES.PAUSED_RATE_LIMIT, JOB_STATES.CANCELLED, JOB_STATES.READY].includes(session.state)) return;
   const cancelled = error?.name === "AbortError";
+  if (!cancelled && error instanceof SarvamError && error.status === 429 && session.transcriptTranslationPending) {
+    const retryAt = Date.now() + Math.max(60, error.retryAfterSeconds || 0) * 1000;
+    await patchSession(sessionId, {
+      state: JOB_STATES.PAUSED_RATE_LIMIT, retryAt, error: error.message,
+      progress: { ...session.progress, message: `Sarvam translation rate limit reached. Resume after ${new Date(retryAt).toLocaleTimeString()}.` }
+    });
+    return;
+  }
   await patchSession(sessionId, {
     state: cancelled ? JOB_STATES.CANCELLED : JOB_STATES.ERROR,
     error: cancelled ? "" : friendlyError(error),
@@ -657,12 +755,19 @@ async function recoverInterruptedSession(session) {
     JOB_STATES.EXTRACTING,
     JOB_STATES.STAGING
   ]);
-  if (!runningStates.has(session.state) || activeRuns.has(session.sessionId)) return session;
+  if (!runningStates.has(session.state) || activeRuns.has(session.sessionId) || jobLaunchPending) return session;
+  await stopCaptureAndRestore(session).catch(() => {});
   const recoverableMessage = session.finalPrompt
     ? "Chrome was interrupted while finalizing your prompt. The complete prompt is saved; choose Resume."
-    : session.frames?.length
-      ? "Chrome interrupted the background task. Your captured frames are saved; choose Resume."
-      : "Chrome interrupted the background task before capture finished. Start the lecture again.";
+    : session.extractionComplete || (!session.frames?.length && session.geminiExtractions?.length)
+      ? "Chrome interrupted prompt finalization. Your visual evidence is saved; choose Resume."
+      : session.frames?.length
+        ? "Chrome interrupted the background task. Your captured frames are saved; choose Resume."
+        : session.transcriptTranslationPending && session.sourceTranscript?.length
+          ? "Chrome interrupted English translation. Your captions are saved; choose Resume."
+          : session.planningPending && session.transcript?.length
+          ? "Chrome interrupted timestamp planning. Your transcript is saved; choose Resume."
+          : "Chrome interrupted the background task before capture finished. Start the lecture again.";
   return patchSession(session.sessionId, {
     state: JOB_STATES.ERROR,
     error: recoverableMessage,
@@ -674,6 +779,8 @@ async function recoverInterruptedSession(session) {
 }
 
 async function setState(session, state, message, percent) {
+  const current = await getSession(session.sessionId);
+  if (current?.state === JOB_STATES.CANCELLED) throw new DOMException("Operation cancelled", "AbortError");
   assertTransition(session.state, state);
   return patchSession(session.sessionId, {
     state,
@@ -690,10 +797,26 @@ async function updateProgress(sessionId, percent, message, current, total) {
 }
 
 async function stopCaptureAndRestore(session) {
+  if (!session) return;
+  const pending = cleanupRuns.get(session.sessionId);
+  if (pending) return pending;
+  const cleanup = releaseCapture(session);
+  cleanupRuns.set(session.sessionId, cleanup);
+  try {
+    await cleanup;
+  } finally {
+    cleanupRuns.delete(session.sessionId);
+  }
+}
+
+async function releaseCapture(session) {
+  session = await getSession(session.sessionId).catch(() => session) || session;
+  if (session.captureReleased) return;
   await runtimeMessage({ type: "OFFSCREEN_STOP_CAPTURE" }).catch(() => {});
   // Only the embed backend owns a tab. The watch backend's captureTabId is the user's own
   // lecture tab and must never be closed.
   if (session?.captureBackend === "embed" && Number.isInteger(session.captureTabId) && session.captureTabId) {
+    embedFrameIds.delete(session.captureTabId);
     await chrome.tabs.remove(session.captureTabId).catch(() => {});
   }
   // Sessions saved by an earlier build used a separate window instead of a tab.
@@ -703,20 +826,22 @@ async function stopCaptureAndRestore(session) {
   if (session?.youtubeTabId && session?.originalVisualSettings) {
     await restoreYouTubeVisuals(session.youtubeTabId, session.originalVisualSettings).catch(() => {});
   }
-  if (session?.youtubeTabId && session?.originalPlayback) {
+  if (session?.captureBackend && session?.youtubeTabId && session?.originalPlayback) {
     await tabMessage(session.youtubeTabId, {
       type: "RESTORE_VIDEO",
       snapshot: session.originalPlayback
     }).catch(() => {});
   }
+  await patchSession(session.sessionId, { captureReleased: true, captureTabId: 0, captureWindowId: 0 }).catch(() => {});
 }
 
 // Chooses where frames come from. The embed backend is preferred because an embedded player does
 // not serve the pre-roll the watch page serves, so a non-Premium user is not stalled mid-capture.
 // The watch backend preserves the previous behaviour and is used whenever the player page is
 // unusable, which also keeps WiseNotes working offline.
-async function prepareCaptureBackend(session, planningWarning) {
-  if (!EMBED_CAPTURE_ENABLED) return prepareWatchBackend(session, planningWarning);
+async function prepareCaptureBackend(session, planningWarning, signal) {
+  throwIfAborted(signal);
+  if (!EMBED_CAPTURE_ENABLED) return prepareWatchBackend(session, planningWarning, signal);
 
   let captureTabId = 0;
   let waiting = session;
@@ -737,20 +862,24 @@ async function prepareCaptureBackend(session, planningWarning) {
     });
     captureTabId = captureTab?.id;
     if (!Number.isInteger(captureTabId)) throw new Error("Chrome did not open the capture tab");
-
-    await waitForPlayerTab(captureTabId);
+    waiting = await patchSession(session.sessionId, { captureBackend: "embed", captureTabId, captureReleased: false });
+    throwIfAborted(signal);
+    await waitForPlayerTab(captureTabId, CAPTURE_TAB_PREPARE_TIMEOUT_MS, signal);
     await ensureOffscreen();
     // Capture is started before the player is asked to load anything, so the tab is already
     // marked as captured and keeps running after the user returns to their lecture tab.
-    const streamId = await acquireCaptureStream(waiting, captureTabId, "the WiseNotes player tab");
+    const streamId = await acquireCaptureStream(waiting, captureTabId, "the WiseNotes player tab", signal);
+    throwIfAborted(signal);
     const started = await runtimeMessage({ type: "OFFSCREEN_START_CAPTURE", streamId });
+    throwIfAborted(signal);
     if (!started?.ok) throw new Error(started?.error || "Could not start capture on the embed tab");
 
     let prepared = await tabMessage(captureTabId, { type: "PREPARE_EMBED" });
+    throwIfAborted(signal);
     if (!prepared.ok) {
       // Bring the tab forward once and retry before giving up on the embed backend.
       await chrome.tabs.update(captureTabId, { active: true }).catch(() => {});
-      await sleep(1500);
+      await abortableDelay(1500, signal);
       prepared = await tabMessage(captureTabId, { type: "PREPARE_EMBED" });
     }
     if (!prepared.ok) throw new Error(prepared.error);
@@ -760,10 +889,12 @@ async function prepareCaptureBackend(session, planningWarning) {
     }
     // Pinned before the first probe, so every captured frame comes from the highest level offered.
     const quality = await prepareEmbedQuality(captureTabId);
+    throwIfAborted(signal);
     const qualityWarning = quality?.requested
       ? ""
       : "WiseNotes could not pin the embedded player's quality, so the capture used whatever resolution the player chose.";
     await probeCaptureTab(captureTabId);
+    throwIfAborted(signal);
     await setVideoState(session.youtubeTabId, { paused: true, muted: true });
 
     return {
@@ -778,8 +909,15 @@ async function prepareCaptureBackend(session, planningWarning) {
     if (Number.isInteger(captureTabId) && captureTabId) {
       await chrome.tabs.remove(captureTabId).catch(() => {});
     }
+    await runtimeMessage({ type: "OFFSCREEN_STOP_CAPTURE" }).catch(() => {});
+    if (error?.name === "AbortError" || signal?.aborted) {
+      // Cancellation may have restored playback while an in-flight preparation command
+      // was still changing it. Let the final cleanup restore the settled state once more.
+      await patchSession(session.sessionId, { captureReleased: false }).catch(() => {});
+      throw new DOMException("Operation cancelled", "AbortError");
+    }
     const notice = `WiseNotes could not use the ad-free player tab (${friendlyError(error)}), so it captured the lecture tab instead.${captureTabHint(error)}`;
-    return prepareWatchBackend(waiting, [planningWarning, notice].filter(Boolean).join(" "));
+    return prepareWatchBackend(waiting, [planningWarning, notice].filter(Boolean).join(" "), signal);
   }
 }
 
@@ -793,7 +931,8 @@ function captureTabHint(error) {
   return "";
 }
 
-async function prepareWatchBackend(session, warning) {
+async function prepareWatchBackend(session, warning, signal) {
+  throwIfAborted(signal);
   let originalVisualSettings = null;
   const warnings = warning ? [warning] : [];
   try {
@@ -804,9 +943,18 @@ async function prepareWatchBackend(session, warning) {
   } catch (error) {
     warnings.push(`WiseNotes could not request maximum YouTube quality (${friendlyError(error)}).`);
   }
-
+  await patchSession(session.sessionId, {
+    captureBackend: "watch", captureTabId: session.youtubeTabId,
+    captureReleased: false, originalVisualSettings
+  });
+  throwIfAborted(signal);
   const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: session.youtubeTabId });
+  throwIfAborted(signal);
   const captureStart = await runtimeMessage({ type: "OFFSCREEN_START_CAPTURE", streamId });
+  if (signal?.aborted) {
+    await runtimeMessage({ type: "OFFSCREEN_STOP_CAPTURE" }).catch(() => {});
+    throwIfAborted(signal);
+  }
   if (!captureStart?.ok) throw new Error(captureStart?.error || "Could not start tab capture.");
 
   return {
@@ -825,7 +973,8 @@ async function prepareWatchBackend(session, warning) {
 // asked to click the WiseNotes icon there once. By then the popup is long closed, so the request has
 // to live where the user is actually looking instead of in a popup nobody has open. The wait is
 // bounded, and the run falls back to the lecture tab if the grant never arrives.
-async function acquireCaptureStream(session, tabId, label) {
+async function acquireCaptureStream(session, tabId, label, signal) {
+  throwIfAborted(signal);
   try {
     return await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
   } catch (error) {
@@ -836,7 +985,7 @@ async function acquireCaptureStream(session, tabId, label) {
   const deadline = Date.now() + CAPTURE_TAB_INVOKE_TIMEOUT_MS;
   try {
     while (Date.now() < deadline) {
-      await sleep(1000);
+      await abortableDelay(1000, signal);
       try {
         return await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
       } catch (error) {
@@ -884,12 +1033,13 @@ function needsInvocation(error) {
 // or title needs either the "tabs" permission or a host permission for that tab, and WiseNotes
 // deliberately asks for neither on the player page. tab.status is available without any permission,
 // and PREPARE_EMBED still does the real waiting and reports a useful error if no player appears.
-async function waitForPlayerTab(tabId, timeoutMs = CAPTURE_TAB_PREPARE_TIMEOUT_MS) {
+async function waitForPlayerTab(tabId, timeoutMs = CAPTURE_TAB_PREPARE_TIMEOUT_MS, signal) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    throwIfAborted(signal);
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     if (tab?.status === "complete") return tab;
-    await sleep(250);
+    await abortableDelay(250, signal);
   }
   throw new Error("the capture tab did not finish loading the WiseNotes player page");
 }
@@ -1078,7 +1228,7 @@ async function restoreYouTubeVisuals(tabId, settings) {
   });
 }
 
-async function extractTranscript(tabId) {
+async function extractTranscript(tabId, signal) {
   const execution = await chrome.scripting.executeScript({
     target: { tabId },
     world: "MAIN",
@@ -1112,13 +1262,12 @@ async function extractTranscript(tabId) {
       };
 
       // Caption metadata can populate shortly after the video element itself becomes ready.
-      // Prefer a source that already exposes a direct English track, an English translation
-      // target, or an explicitly translatable track; otherwise briefly wait for richer data.
+      // Native Indic tracks are usable even without YouTube's translation catalog.
       const deadline = Date.now() + 2500;
       let sources = readSources();
       while (Date.now() < deadline) {
         const richEnough = sources.some((source) =>
-          source.tracks.some((track) => /^en(?:-|$)/i.test(track.languageCode) || track.isTranslatable === true)
+          source.tracks.some((track) => track.baseUrl)
           || source.translationLanguages.some((language) => /^en(?:-|$)/i.test(language.languageCode))
         );
         if (richEnough) break;
@@ -1131,44 +1280,51 @@ async function extractTranscript(tabId) {
   const captionData = mergeCaptionSources(execution?.[0]?.result ?? []);
   const tracks = captionData.tracks ?? [];
   if (tracks.length) {
-    const candidates = englishCaptionCandidates(tracks, captionData.translationLanguages);
-    const hasDirectEnglish = candidates.some((candidate) => !candidate.translated);
+    const candidates = transcriptCaptionCandidates(tracks, captionData.translationLanguages);
     let translatedCandidatesAttempted = 0;
     let lastTranslationError = null;
+    let lastCaptionError = null;
     for (const candidate of candidates) {
+      throwIfAborted(signal);
       try {
         if (candidate.translated) translatedCandidatesAttempted += 1;
-        const json = await fetchCaptionJson(captionJson3Url(candidate));
+        const json = await fetchCaptionJson(captionJson3Url(candidate), 0, signal);
         const segments = parseJson3Transcript(json);
-        if (segments.length) return segments;
+        if (segments.length) return {
+          segments,
+          sourceLanguageCode: candidate.requiresTranslation ? candidate.sourceLanguageCode : "en-IN",
+          ocrLanguageCode: candidates.find((track) => track.requiresTranslation && track.track.kind === "asr")?.sourceLanguageCode
+            || normalizeLanguageCode(candidate.track.languageCode)
+        };
         throw new Error("The caption response contained no usable text.");
       } catch (error) {
+        if (error?.name === "AbortError") throw error;
+        lastCaptionError = error;
         if (candidate.translated) lastTranslationError = error;
         // A rate limit applies to every remaining candidate, so trying them only deepens the
         // throttle. Breaking still lets a direct-English lecture fall through to the on-page
         // transcript panel below.
         if (isCaptionRateLimit(error)) break;
-        // Try the next source. Human English remains first, automatic English second,
-        // and YouTube-translated English sources follow in quality order.
+        // Try direct English, native Indic, then YouTube-translated English tracks.
       }
     }
-    if (!hasDirectEnglish) {
-      if (translatedCandidatesAttempted) {
-        throw englishTranslationFailedError(lastTranslationError);
-      }
-      throw noEnglishCaptionsError();
-    }
+    const fallback = await tabMessage(tabId, { type: "EXTRACT_TRANSCRIPT" });
+    throwIfAborted(signal);
+    if (fallback.ok && fallback.segments?.length) return { segments: fallback.segments, sourceLanguageCode: "", ocrLanguageCode: "" };
+    if (translatedCandidatesAttempted) throw englishTranslationFailedError(lastTranslationError);
+    if (candidates.length && lastCaptionError) throw new Error(`WiseNotes could not retrieve the lecture captions (${friendlyError(lastCaptionError)}). Reload the lecture and try again.`);
+    throw noEnglishCaptionsError();
   }
 
   const fallback = await tabMessage(tabId, { type: "EXTRACT_TRANSCRIPT" });
   if (!fallback.ok || !fallback.segments?.length) {
-    throw new Error(fallback.error || "No English transcript was available for this lecture.");
+    throw new Error(fallback.error || "No readable captions were available for this lecture.");
   }
-  return fallback.segments;
+  return { segments: fallback.segments, sourceLanguageCode: "", ocrLanguageCode: "" };
 }
 
 function noEnglishCaptionsError() {
-  const error = new Error("This lecture has captions, but no English caption track is available.");
+  const error = new Error("No readable English or supported Indic captions were available for this lecture.");
   error.code = "NO_ENGLISH_CAPTIONS";
   return error;
 }
@@ -1206,15 +1362,15 @@ function parseCaptionBody(body) {
 
 // An empty body usually means caption metadata has not settled yet, and the popup already tells
 // the user to reload and retry, so one bounded retry does that for them.
-async function fetchCaptionJson(url, attempt = 0) {
-  const response = await fetch(url, { credentials: "include", cache: "no-store" });
+async function fetchCaptionJson(url, attempt = 0, signal) {
+  const response = await fetch(url, { credentials: "include", cache: "no-store", signal });
   if (!response.ok) throw captionRequestError(response);
   const body = await response.text();
   const json = parseCaptionBody(body);
   if (json) return json;
   if (attempt < 1) {
-    await sleep(600);
-    return fetchCaptionJson(url, attempt + 1);
+    await abortableDelay(600, signal);
+    return fetchCaptionJson(url, attempt + 1, signal);
   }
   throw new Error(`the caption endpoint returned ${body.length} bytes of unusable data over HTTP ${response.status}`);
 }

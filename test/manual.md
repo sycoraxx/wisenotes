@@ -7,35 +7,32 @@ Use a fresh Chrome profile when testing permissions and first-run behavior. Neve
 - Load the repository as an unpacked extension in Chrome 116+.
 - Confirm the service worker and both extension pages report no console errors.
 - Confirm the popup clearly says that WiseNotes captures actual video frames and is not transcript-only summarization.
-- Confirm Start stays disabled without a YouTube watch page or Gemini key, and becomes enabled without requiring an LLM tab or account.
+- Confirm Start stays disabled without a YouTube watch page or Sarvam key, and becomes enabled without requiring an LLM tab or account.
 
 ## Transcript
 
 - Human-captioned English lecture: transcript is extracted without opening the panel when player data is available.
 - Automatic English captions: transcript succeeds.
-- Non-English captions with English available in YouTube's translation list: an English-translated JSON3 transcript succeeds.
-- Non-English captions explicitly marked translatable, but with YouTube's translation-language list omitted: WiseNotes still attempts `tlang=en` and succeeds.
+- Hindi, Bengali, Tamil, Telugu, Urdu, and other supported Indic caption tracks: native JSON3 captions are translated through Sarvam, then English captions feed the planner.
+- An Indic track with no English translation target and `isTranslatable=false` still succeeds through Sarvam translation.
 - Human English, automatic English, and translated English all present: human English is selected.
 - Captions disabled: the popup reports a useful failure.
-- Captions available only in another language with no English translation target: the popup reports that English is unavailable and hides the percentage and progress bar.
-- Force every offered translated-caption request to fail: the popup reports a translation retrieval failure rather than claiming no English option exists, hides the progress bar, and shows the explanation only once.
-- Force the player-response path to fail and verify transcript-panel scraping.
+- Unsupported non-Indic captions with no English translation or readable panel fallback: the popup reports that supported captions are unavailable.
+- Force native Indic retrieval and every offered English translation request to fail: confirm a useful caption error. Force Sarvam translation to return 429: originals and completed English batches remain saved and Resume completes only unfinished segments.
+- Force the player-response path to fail and verify transcript-panel scraping. Indic or Romanized Indic panel text must be detected and translated rather than assumed English.
 - On a lecture whose captions repeat lines across rolling JSON3 events, confirm the final prompt lists each caption line only once.
 
 ## Semantic timestamp planning
 
-- Confirm WiseNotes lists the models exposed to the API key, rejects aliases and preview/specialized variants, and sends the complete timestamped transcript without images to an explicit stable Flash model.
-- With a new Gemini project, confirm catalog entries for legacy 2.x Flash models are ignored and never become the final misleading `404` attempt.
-- Confirm the popup names the Flash model actually selected for the lecture.
-- After one successful plan, make model discovery fail and confirm the cached successful model is used without calling the catalog.
-- With no cached model, make model discovery fail and confirm the current stable full-Flash ladder is attempted newest-first before the configured stable frame-reading model.
-- Stall model discovery and planning generation separately; confirm discovery stops after 20 seconds per attempt and generation after 120 seconds per attempt, with transient retries remaining bounded.
-- Simulate a `503` and confirm exponential retries occur before WiseNotes tries the next compatible Flash model.
-- Make the first four models fail and confirm WiseNotes continues to the fifth, then to stable Flash-Lite.
-- Simulate a planner `429` and confirm no second model is called, `Retry-After` is saved, and Resume retries planning.
-- Confirm the structured response contains bounded, chronological visual moments and invalid timestamps are rejected.
-- Use a lecture with indirect visual language and confirm semantic moments are captured even without literal formula/diagram keywords.
-- Simulate every planner candidate returning `503` and confirm the transcript is preserved, no capture begins, and the popup offers Resume.
+- Confirm the complete timestamped transcript is sent to `api.sarvam.ai/v1/chat/completions` with `model=sarvam-105b`, strict JSON output, and a 4096-token budget.
+- Confirm no Google Generative Language request is made, even if old provider settings exist.
+- Confirm the popup identifies Sarvam-105B and the account has Chat Completions access.
+- Close the popup while planning takes longer than 30 seconds; confirm the bounded request continues.
+- Simulate transient 503/timeouts and confirm at most three attempts; a persistent failure preserves the transcript and offers Resume.
+- Simulate a planner 429; confirm one attempt, a saved Retry-After, and a paused session.
+- Confirm invalid, truncated, or refused plans fail visibly rather than beginning capture.
+- Confirm chronological bounded windows and local 30-second coverage probes still work.
+- Check a long transcript against the 128K context limit; provider rejection should retain the transcript.
 
 ## Frame capture
 
@@ -46,7 +43,7 @@ Test the two target formats first and treat them as acceptance-critical: a chalk
 - Confirm the saved crop contains the actual video frame and not comments, recommendations, browser chrome, or another tab.
 - Confirm the embedded player is pinned to the highest quality the lecture offers: no quality warning appears, and a frame late in the lecture is as sharp as one from the start rather than having dropped resolution mid-run.
 - Confirm no player chrome reaches a saved frame: no title bar, control bar, progress bar, YouTube watermark, gradient scrim, or "Watch on YouTube" overlay, checked on a frame captured after a seek as well as the first frame, since YouTube restores its chrome when the player is interacted with.
-- Confirm formulas and diagrams absent from captions appear in the Gemini extraction.
+- Confirm text, equations, and code absent from captions appear in the OCR output. Record failures on handwritten content and diagrams; do not assume OCR understands geometry.
 - Confirm duplicate static slides are removed.
 - Confirm a changing board around a trigger receives the later settled capture.
 - Pause during a blurred transition and confirm WiseNotes prefers a clearer frame from 1.25 seconds before or after, but never substitutes a different slide.
@@ -64,23 +61,34 @@ Test the two target formats first and treat them as acceptance-critical: a chalk
 - Play a lecture that forbids embedding and confirm WiseNotes reports that the player page was unavailable and then captures the lecture tab instead.
 - Force a blank tab stream and confirm visible-tab fallback returns only the player crop.
 
-## Gemini
+## Sarvam OCR
 
-- Verify batches contain no more than sixteen images.
-- Inspect one request and confirm every frame’s nearby transcript context is represented.
-- Confirm returned equations are structured JSON and retain the captured timestamp.
-- Test handwritten and typeset equations containing fractions, roots, accents, arrows, primes, nested subscripts, matrices, cases, integrals with bounds, and aligned derivations. Confirm every visible step is returned in order as compilable LaTeX.
-- Deliberately use a faint or ambiguous symbol and confirm it appears in `uncertainTokens` with reduced confidence rather than being guessed from captions.
-- Simulate malformed JSON, network failure, and an HTTP 429.
-- Stall a frame-extraction request and confirm WiseNotes retries automatically up to three times, that no attempt waits indefinitely, and that an error with **Resume** is offered only after the final attempt.
-- Confirm an HTTP 429 is never retried and pauses the session instead.
-- For 429, confirm completed batches remain, the session pauses, and Resume starts at the first unfinished frame.
-- After success, inspect IndexedDB and confirm raw frame data is gone.
+- Inspect an upload: exactly one cropped JPEG in a `file` multipart part, the inferred or user-selected source `language`, `content_type=mixed`; no captions or API key in the URL.
+- Confirm the returned job ID is saved before polling and corresponds to that frame’s timestamp.
+- Confirm the status route is polled until completed, then results are fetched using `format=md`.
+- Test equations, code indentation, and tables. Confirm original OCR Markdown is kept verbatim, an English translation is attached, and unknown confidence remains null.
+- Test an Indic board during an English-captioned lecture. Set Board and slide language appropriately; OCR must use that source language and the resulting prose must become English.
+- Translate an Indic paragraph around code fences and math. Protected code/math bytes, order, and caption boundaries must survive; intentional token corruption or untranslated output must fail visibly.
+- Interrupt after OCR succeeds but during translation. Resume must use saved raw OCR and completed translation chunks without creating another OCR job.
+- Test a diagram with labels: the prompt must disclose missing geometry and must not guess invisible relationships from captions.
+- Make every OCR result blank; confirm no transcript-only prompt is produced.
+- Simulate OCR creation losing its response; confirm it is not automatically repeated. A manual Resume may create another charged job.
+- Simulate a 429 after job creation; confirm Resume reuses the saved job and skips completed frames.
+- Simulate failed, rejected, partially completed, missing-page, or multiple-page results; confirm they are not accepted as successful single-frame evidence.
+- Stall status/results; confirm bounded attempts and an overall 10-minute polling deadline. Resume should check the same known job.
+- Cancel while awaiting permission, creating an OCR job, and polling. Confirm local requests stop and the cancelled state stays cancelled; an already submitted Sarvam job may continue remotely.
+- Reload the extension during capture; reopen the popup and confirm cleanup closes owned tabs, stops the stream, and restores playback.
+- Interrupt after OCR completion but before prompt storage. Resume must build the prompt locally, and JPEGs must survive until the prompt is saved.
+- Start from two windows simultaneously; only one run may acquire the shared capture stream.
+- After success, inspect IndexedDB and confirm the raw JPEG array is empty.
+- Upgrade a saved 0.3.x session: ready prompts remain copyable; unfinished captured frames resume using Sarvam without the old key.
+- Use Clear lecture data while a job is active and Resume without a key; confirm failures are shown in the popup.
 
 ## Universal prompt handoff
 
 - Confirm the ready state says **Your universal prompt is ready** and exposes **Copy universal prompt**.
 - Copy the prompt and confirm it exactly matches the prompt stored for the session.
+- Confirm the prompt requests English titles, headings, explanations, table labels, and recap, even for native Indic captions/OCR. Original OCR remains available for verification; code and mathematical literals remain unchanged.
 - Confirm the prompt contains no provider-specific instructions or Claude-only artifact requirement.
 - Paste it manually into Claude, ChatGPT, and Gemini and confirm each receives a self-contained request for one `pdflatex` document.
 - Confirm WiseNotes does not request host access to, open, inspect, or modify any LLM provider site.
@@ -93,5 +101,7 @@ Run ten English lectures across mathematics, physics, computer science, and engi
 - Confirm the document contains no invented figures or notation.
 - Compile with `pdflatex` or Overleaf.
 - Record whether the result is useful without extension debugging.
+
+Also run Hindi, Bengali, and Tamil lectures with native captions and native-script board text. Review the English translation against both the source captions and the original OCR; repeat one lecture with Romanized Indic panel text and one with English captions plus an Indic board.
 
 The beta target is at least eight useful documents out of ten and under five minutes of WiseNotes processing for a 30-minute lecture, excluding the chosen provider’s generation time.

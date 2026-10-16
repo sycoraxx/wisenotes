@@ -1,15 +1,25 @@
-import { DEFAULT_MODEL } from "./lib/gemini.js";
+import { SARVAM_LLM_MODEL } from "./lib/sarvam.js";
+import { LANGUAGE_NAMES, normalizeLanguageCode } from "./lib/languages.js";
 
 const apiKey = document.getElementById("api-key");
 const model = document.getElementById("model");
 const status = document.getElementById("status");
+const ocrLanguage = document.getElementById("ocr-language");
+
+for (const [code, name] of Object.entries(LANGUAGE_NAMES)) {
+  const option = document.createElement("option");
+  option.value = code;
+  option.textContent = name;
+  ocrLanguage.appendChild(option);
+}
 
 initialize();
 
 async function initialize() {
-  const saved = await chrome.storage.local.get(["geminiApiKey", "geminiModel"]);
-  apiKey.value = saved.geminiApiKey || "";
-  model.value = saved.geminiModel || DEFAULT_MODEL;
+  const saved = await chrome.storage.local.get(["sarvamApiKey", "ocrLanguageCode"]);
+  apiKey.value = saved.sarvamApiKey || "";
+  model.value = SARVAM_LLM_MODEL;
+  ocrLanguage.value = normalizeLanguageCode(saved.ocrLanguageCode) || "auto";
 }
 
 document.getElementById("toggle-key").addEventListener("click", (event) => {
@@ -20,21 +30,17 @@ document.getElementById("toggle-key").addEventListener("click", (event) => {
 
 document.getElementById("save").addEventListener("click", async () => {
   const key = apiKey.value.trim();
-  const modelId = model.value.trim() || DEFAULT_MODEL;
   if (!key) {
-    status.textContent = "Paste a Gemini API key before saving.";
+    status.textContent = "Paste a Sarvam API key before saving.";
     return;
   }
-  if (!/^gemini-[a-z0-9.-]+$/i.test(modelId)) {
-    status.textContent = "That Gemini model ID does not look valid.";
-    return;
-  }
-  await chrome.storage.local.set({ geminiApiKey: key, geminiModel: modelId });
+  await chrome.storage.local.set({ sarvamApiKey: key, ocrLanguageCode: ocrLanguage.value });
+  await chrome.storage.local.remove(["geminiApiKey", "geminiModel", "lastSuccessfulPlannerModel"]);
   status.textContent = "Saved locally. You can close this tab.";
 });
 
 document.getElementById("forget").addEventListener("click", async () => {
-  await chrome.storage.local.remove("geminiApiKey");
+  await chrome.storage.local.remove(["sarvamApiKey", "geminiApiKey"]);
   apiKey.value = "";
-  status.textContent = "The Gemini API key was removed.";
+  status.textContent = "The Sarvam API key was removed.";
 });

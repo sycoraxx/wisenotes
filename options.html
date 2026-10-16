@@ -28,27 +28,41 @@
         <div class="section-heading">
           <div>
             <span class="section-kicker">Connection</span>
-            <label for="api-key">Gemini API key</label>
+            <label for="api-key">Sarvam API key</label>
           </div>
           <span class="private-pill">Stored locally</span>
         </div>
         <div class="secret-row">
-          <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your Google AI Studio key">
+          <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your Sarvam API key">
           <button id="toggle-key" class="secondary" type="button">Show</button>
         </div>
-        <p class="hint">Create a key in <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer">Google AI Studio</a>. Free-tier data may be used by Google to improve its products.</p>
+        <p class="hint">Create a key in the <a href="https://indus.sarvam.ai/key-management" target="_blank" rel="noreferrer">Sarvam dashboard</a>. WiseNotes uses Chat Completions, Document AI, and Text Translation. API usage consumes Sarvam credits.</p>
       </section>
 
       <section class="glass-card">
         <div class="section-heading">
           <div>
             <span class="section-kicker">Visual intelligence</span>
-            <label for="model">Frame-reading model</label>
+            <label for="model">Planning model</label>
           </div>
           <span class="model-glyph" aria-hidden="true">◫</span>
         </div>
-        <input id="model" type="text" spellcheck="false" value="gemini-3.5-flash-lite">
-        <p class="hint">Selected images use this efficient model. For semantic timestamp planning, WiseNotes tries the last successful explicit stable Flash model, then every available full Flash model, followed by stable Flash-Lite.</p>
+        <input id="model" type="text" readonly value="sarvam-105b">
+        <p class="hint">Sarvam-105B plans visual moments from captions. Sarvam Vision reads selected frames through Document AI OCR. OCR can recover text, equations, code, and tables, but can miss faint handwriting and diagram geometry.</p>
+      </section>
+
+      <section class="glass-card">
+        <div class="section-heading">
+          <div>
+            <span class="section-kicker">Language</span>
+            <label for="ocr-language">Board and slide language</label>
+          </div>
+          <span class="private-pill">Notes in English</span>
+        </div>
+        <select id="ocr-language">
+          <option value="auto">Automatic — use the caption language</option>
+        </select>
+        <p class="hint">Indic captions and OCR prose are translated into English. If the board uses a different language from the captions, select it here to improve OCR. Equations and code stay unchanged.</p>
       </section>
 
       <div class="actions">
@@ -61,7 +75,7 @@
         <span class="privacy-symbol" aria-hidden="true">⌁</span>
         <div>
         <strong>Privacy boundary</strong>
-        <p>The complete timestamped transcript is sent to a compatible stable Gemini Flash model to choose visually important moments; retrying after a service failure may send it again. Selected lecture frames and nearby transcript context are then sent to the frame-reading model. WiseNotes builds the final universal prompt locally and never sends it to another LLM provider; you choose where to paste it.</p>
+        <p>Captions and OCR text may go to Sarvam for language detection and English translation. The English transcript goes to Sarvam-105B for visual planning. Selected cropped JPEGs go to Document AI for OCR. WiseNotes saves original evidence and translation progress locally for Resume. Sarvam may retain uploads under its service terms. The universal prompt is built locally; you choose where to paste it.</p>
         </div>
       </aside>
     </main>
