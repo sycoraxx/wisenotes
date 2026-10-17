@@ -213,6 +213,35 @@ test("caption translation rate limits keep source and completed captions recover
   assert.equal(state.publicSession(sessions.get("s")).canResume, true);
 });
 
+test("Resume upgrades partially translated captions to batches before planning", async () => {
+  const sourceTranscript = Array.from({ length: 40 }, (_, start) => ({ start, text: "नमस्ते" }));
+  const { context, sessions } = harness(savedSession({
+    state: "error", sourceTranscript, sourceLanguageCode: "hi-IN", frames: [],
+    transcript: sourceTranscript.slice(0, 3).map((segment) => ({ ...segment, text: "Hello" })),
+    transcriptTranslationPending: true
+  }));
+  let requests = 0;
+  let planned = false;
+  context.translateTranscriptToEnglish = (options) => translation.translateTranscriptToEnglish({
+    ...options,
+    fetchImpl: async (_url, init) => {
+      requests += 1;
+      const texts = JSON.parse(JSON.parse(init.body).messages.at(-1).content).texts;
+      return { ok: true, status: 200, json: async () => ({ choices: [{
+        finish_reason: "stop",
+        message: { content: JSON.stringify({ translations: texts.map(({ id }) => ({ id, text: "Hello" })) }) }
+      }] }) };
+    }
+  });
+  context.continueFromTranscript = async () => { planned = true; };
+  await context.handleMessage({ type: "RESUME_JOB", sessionId: "s" });
+  await settle(context);
+  assert.equal(requests, 2);
+  assert.equal(planned, true);
+  assert.deepEqual(sessions.get("s").transcript, sourceTranscript.map((segment) => ({ ...segment, text: "Hello" })));
+  assert.equal(sessions.get("s").transcriptTranslationPending, false);
+});
+
 test("OCR translation failure resumes from raw evidence without another OCR job", async () => {
   let reads = 0;
   let throttle = true;

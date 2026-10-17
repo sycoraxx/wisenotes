@@ -19,6 +19,8 @@ Use a fresh Chrome profile when testing permissions and first-run behavior. Neve
 - Captions disabled: the popup reports a useful failure.
 - Unsupported non-Indic captions with no English translation or readable panel fallback: the popup reports that supported captions are unavailable.
 - Force native Indic retrieval and every offered English translation request to fail: confirm a useful caption error. Force Sarvam translation to return 429: originals and completed English segments remain saved and Resume completes only unfinished segments.
+- On a long Indic lecture, verify caption translation uses structured Chat Completions batches of at most 32 captions / 4,000 prose characters / 64 fragments, not one request per caption. Inspect that reasoning is disabled and no timestamps or protected literals are sent for translation. Compare elapsed time and output quality against the previous release.
+- Simulate reordered batch results: translations must stay attached to their original timestamps by JSON ID. Missing, duplicate, unknown, empty, untranslated, malformed, or truncated results must not checkpoint any part of that batch. Resume must retain all prior valid batches, including partially completed sessions from 0.5.1.
 - Force the player-response path to fail and verify transcript-panel scraping. Indic or Romanized Indic panel text must be detected and translated rather than assumed English.
 - On a lecture whose captions repeat lines across rolling JSON3 events, confirm the final prompt lists each caption line only once.
 

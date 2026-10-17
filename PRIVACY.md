@@ -20,7 +20,7 @@ Candidate scout frames remain local. Sarvam receives only the frames that surviv
 
 The English transcript is sent once per planning attempt. Resuming after a planning failure sends it again.
 
-Requests go directly to `api.sarvam.ai` with the user’s subscription key in an authentication header. Source captions and OCR prose may be sent to `sarvam-105b` for language detection and to `/translate` with `sarvam-translate:v1` for English translation. The English transcript goes to `sarvam-105b` for planning. Selected cropped images go to Document AI for OCR; the OCR upload does not include captions.
+Requests go directly to `api.sarvam.ai` with the user’s subscription key in an authentication header. Source captions and OCR prose may be sent to `sarvam-105b` for language detection. Caption prose is translated in structured JSON batches by `sarvam-105b`; timestamps and protected literals stay local to this translation step. OCR prose and unusually large individual captions use `/translate` with `sarvam-translate:v1` for English translation. Caption batches consume Chat Completions credits. The English transcript goes to `sarvam-105b` for planning. Selected cropped images go to Document AI for OCR; the OCR upload does not include captions.
 
 Planning, language detection, translation, and read-only OCR status/results requests may retry transient failures up to three attempts. A 429 pauses immediately. Creating an OCR job is attempted once automatically; after Sarvam returns a job ID, that ID is saved locally and reused on Resume. If creation succeeded but its response was lost, no ID is available and a user-triggered Resume may create another job.
 

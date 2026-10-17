@@ -219,7 +219,7 @@ async function runNewJob(sessionId, apiKey, controller) {
 
 async function continueTranscriptTranslation(sessionId, apiKey, signal) {
   const session = await getSession(sessionId);
-  await updateProgress(sessionId, 2, "Preparing English captions with Sarvam…", session.transcript?.length || 0, session.sourceTranscript.length);
+  await updateProgress(sessionId, 2, "Translating captions into English in batches with Sarvam…", session.transcript?.length || 0, session.sourceTranscript.length);
   const result = await withProviderActivity(() => translateTranscriptToEnglish({
     apiKey, signal,
     segments: session.sourceTranscript,

@@ -8,7 +8,7 @@
 
 WiseNotes is a free, open-source Chrome extension that turns captioned YouTube lectures into visually grounded English LaTeX notes, including lectures with supported Indic-language captions.
 
-WiseNotes captures lecture frames, selects useful visual states locally, and reads them with Sarvam Vision OCR. Captions supply narration and timing; OCR supplies visible text, equations, tables, code, and terminal output. Native Indic captions and OCR prose are translated into English using Sarvam Translate, with original timestamps and visual evidence retained. OCR may miss faint handwriting or diagram geometry, so the final prompt explicitly preserves that uncertainty.
+WiseNotes captures lecture frames, selects useful visual states locally, and reads them with Sarvam Vision OCR. Captions supply narration and timing; OCR supplies visible text, equations, tables, code, and terminal output. Native Indic captions are translated into English in batches with Sarvam-105B; OCR prose uses Sarvam Translate. Original timestamps and visual evidence are retained. OCR may miss faint handwriting or diagram geometry, so the final prompt explicitly preserves that uncertainty.
 
 No WiseNotes subscription, telemetry, or server. Bring a Sarvam API key with Chat Completions, Document AI, and Text Translation access; Sarvam usage consumes your account’s credits. Paste the finished universal prompt into the capable LLM you prefer.
 
@@ -20,7 +20,7 @@ WiseNotes has replaced its Gemini integration with Sarvam APIs. No Gemini API ke
 
 - **Planning and language detection:** `sarvam-105b` through Sarvam Chat Completions.
 - **Screenshot OCR:** Sarvam Document AI (Vision OCR) reads selected lecture frames.
-- **English translation:** `sarvam-translate:v1` translates supported Indic captions and OCR prose while timestamps, code, and equations are preserved locally.
+- **English translation:** `sarvam-105b` translates caption batches using structured JSON; `sarvam-translate:v1` translates OCR prose and unusually large individual captions. Timestamps, code, and equations are preserved locally.
 
 One Sarvam API key is used for these services. Your account needs Chat Completions, Document AI, and Text Translation access, plus sufficient Sarvam credits. The final notes are still generated in the LLM you choose after copying the universal prompt.
 
@@ -71,7 +71,7 @@ Copy the contents of the new release folder over your **existing unpacked extens
 
 Upgrading from the Gemini-based 0.3.x releases also requires a Sarvam API key and the new Sarvam host access. Save the Sarvam key in settings after reloading; an old Gemini key cannot be used with Sarvam. Saving the new key removes the old provider settings. Existing prompts remain available, and recoverable captured frames can resume through Sarvam.
 
-Version 0.5.1 fixes the translation error about a changed equation, code block, or caption boundary. Caption boundaries and protected OCR data now stay local instead of being sent as temporary markers. Completed captions and saved raw OCR remain available on Resume.
+Version 0.5.2 replaces the slow one-caption-at-a-time path with structured caption batches, without bringing back fragile in-text markers. Completed captions and saved raw OCR remain available on Resume.
 
 ## Use
 
@@ -99,9 +99,9 @@ The selected-frame budget is `0.6 × lecture minutes`, rounded up: 18 frames for
 
 ## Captions, without pretending there is a public transcript API
 
-WiseNotes prefers human-written English captions, then automatic English. If no direct English track can be retrieved, it uses native captions in one of Sarvam Translate’s 22 supported Indic languages and translates them to English. YouTube-generated English translations remain a fallback for other available tracks.
+WiseNotes prefers human-written English captions, then automatic English. If no direct English track can be retrieved, it uses supported native Indic captions and translates them to English. YouTube-generated English translations remain a fallback for other available tracks.
 
-The original captions stay saved locally. Each caption is translated separately below the provider’s 2,000-character input limit; timestamps and boundaries stay local, and completed segments are checkpointed. This uses more requests than a combined batch, but does not depend on the translation model preserving special markers. Transcript-panel fallback text is language-detected before planning. The final prompt requires English titles, explanations, headings, and labels while preserving literal code and mathematics.
+The original captions stay saved locally. Sarvam-105B translates up to **32 caption segments per request**, bounded to 4,000 source-prose characters and 64 fragments, with reasoning disabled for this translation step. Structured JSON IDs map each result back to its local caption; timestamps, boundaries, code, and equations are never entrusted to translated markers. A test covering 80 short captions needs 3 requests rather than 80; actual speed depends on provider latency and caption length. Batches are validated completely before their completed segments are checkpointed. Unusually large individual captions use Sarvam Translate chunks of at most 2,000 characters. Transcript-panel fallback text is language-detected before planning. The final prompt requires English titles, explanations, headings, and labels while preserving literal code and mathematics.
 
 It normally downloads the complete timestamped track in one response. Transcript-panel scraping is a compatibility fallback.
 
@@ -110,7 +110,7 @@ The official YouTube Data API cannot download captions from arbitrary public lec
 ## Privacy and cost, plainly
 
 - The Sarvam key stays in `chrome.storage.local`; WiseNotes never syncs or logs it.
-- Captions and OCR prose may go to Sarvam-105B for language detection and to `sarvam-translate:v1` for English translation. The complete English transcript goes to Sarvam-105B for timestamp planning.
+- Captions and OCR prose may go to Sarvam-105B for language detection. Caption batches go to Sarvam-105B for English translation; OCR prose and unusually large individual captions go to `sarvam-translate:v1`. Caption batching uses Chat Completions credits rather than Text Translation credits. The complete English transcript goes to Sarvam-105B for timestamp planning.
 - Candidate frames stay local. Selected cropped JPEGs go to Sarvam Vision for OCR; captions are not uploaded with the images.
 - JPEGs are deleted locally only after OCR succeeds and the final prompt is saved.
 - Raw OCR and its English translation are kept together. Code blocks, mathematical notation, and literal data are protected during translation.
@@ -127,6 +127,7 @@ The official YouTube Data API cannot download captions from arbitrary public lec
 - If YouTube exposes a **Skip Ad** control, the current beta clicks it automatically. The repository documents this because that automation may conflict with YouTube’s terms and may carry account risk.
 - Planning uses `sarvam-105b` through the public V1 Chat Completions endpoint with strict JSON output. Requests have a 120-second timeout; transient planning and OCR polling failures retry at most three times. Rate limits pause immediately. OCR creation is attempted once to avoid automatically duplicating a billable job.
 - Sarvam Vision is an OCR service, so diagram geometry, faint handwriting, and code indentation need special review. Empty OCR never becomes transcript-only notes.
+- Review caption translations, especially for less-represented languages. Batch translation uses Sarvam-105B, whose language coverage and accuracy differ from the dedicated Translate service; fewer requests are not a guarantee of better translations or a fixed speedup.
 - Sarvam-105B has a 128K-token context window. Very large transcripts can exceed provider limits; WiseNotes preserves them on failure.
 - WiseNotes prepares the evidence and prompt. It does not compile or download the final `.tex` file.
 

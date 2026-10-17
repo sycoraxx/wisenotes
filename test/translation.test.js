@@ -7,6 +7,11 @@ const response = (value) => ({ ok: true, status: 200, json: async () => value })
 const translateHindi = (value) => value.replaceAll("नमस्ते", "Hello").replaceAll("दुनिया", "world");
 const options = { apiKey: "fake-key", sourceLanguageCode: "hi-IN", retryDelayMs: 1 };
 const translator = (input) => response({ translated_text: translateHindi(input), source_language_code: "hi-IN" });
+const completion = (value) => response({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(value) } }] });
+const captionTexts = (init) => JSON.parse(JSON.parse(init.body).messages.at(-1).content).texts;
+const captionTranslator = (init) => completion({
+  translations: captionTexts(init).map(({ id, text }) => ({ id, text: translateHindi(text) }))
+});
 
 test("Indic language metadata normalizes all supported languages and YouTube's Odia alias", () => {
   assert.equal(Object.keys(LANGUAGE_NAMES).length, 23);
@@ -76,9 +81,8 @@ test("English captions do not consume translation calls", async () => {
 test("English-labelled captions containing Indic prose are translated", async () => {
   const result = await translateTranscriptToEnglish({
     apiKey: "fake-key", sourceLanguageCode: "en-IN", segments: [{ start: 2, text: "नमस्ते" }],
-    fetchImpl: async (url, init) => url.endsWith("/chat/completions")
-      ? response({ choices: [{ finish_reason: "stop", message: { content: '{"languageCode":"hi-IN"}' } }] })
-      : translator(JSON.parse(init.body).input)
+    fetchImpl: async (_url, init) => JSON.parse(init.body).response_format.json_schema.name === "lecture_source_language"
+      ? completion({ languageCode: "hi-IN" }) : captionTranslator(init)
   });
   assert.deepEqual(result.segments, [{ start: 2, text: "Hello" }]);
 });
@@ -133,13 +137,20 @@ test("chunking preserves Unicode pairs and every source character", () => {
   assert.ok(chunks.every((chunk) => !/[\uD800-\uDBFF]$/.test(chunk)));
 });
 
-test("regression: plain English output needs no protected markers or caption boundaries", async () => {
+test("regression: caption batching uses JSON ids, never protected in-text markers or timestamps", async () => {
   const segments = [{ start: 1.25, duration: 2.3, text: "नमस्ते" }];
   const result = await translateTranscriptToEnglish({
     ...options, segments,
-    fetchImpl: async (_url, init) => {
-      assert.equal(JSON.parse(init.body).input, "नमस्ते");
-      return response({ translated_text: "Hello" });
+    fetchImpl: async (url, init) => {
+      assert.ok(url.endsWith("/v1/chat/completions"));
+      const body = JSON.parse(init.body);
+      assert.equal(body.model, "sarvam-105b");
+      assert.equal(body.reasoning_effort, null);
+      assert.equal(body.max_tokens, 4096);
+      assert.equal(body.response_format.json_schema.strict, true);
+      assert.deepEqual(captionTexts(init), [{ id: 0, text: "नमस्ते" }]);
+      assert.doesNotMatch(body.messages.at(-1).content, /WNSEG|ZXQWNLITERAL|start|duration/);
+      return completion({ translations: [{ id: 0, text: "Hello" }] });
     }
   });
   assert.deepEqual(result.segments, [{ ...segments[0], text: "Hello" }]);
@@ -179,33 +190,36 @@ test("equations retain exact bytes and order without trusting provider formattin
   assert.equal(result.text, "Hello $x=1$ world $y=2$");
 });
 
-test("individual caption translations preserve exact timestamps, count, and order", async () => {
+test("80 short captions take three batch requests while preserving timestamps, count, and order", async () => {
   const segments = Array.from({ length: 80 }, (_, index) => ({ start: index * 2.37, text: "नमस्ते दुनिया" }));
+  let requests = 0;
   const result = await translateTranscriptToEnglish({
     ...options, segments,
-    fetchImpl: async (_url, init) => translator(JSON.parse(init.body).input)
+    fetchImpl: async (_url, init) => { requests += 1; return captionTranslator(init); }
   });
+  assert.equal(requests, 3);
   assert.deepEqual(result.segments, segments.map((segment) => ({ ...segment, text: "Hello world" })));
 });
 
-test("caption translation resumes at the first unfinished segment after 429", async () => {
-  const segments = Array.from({ length: 3 }, (_, start) => ({ start, text: "नमस्ते ".repeat(180) }));
+test("caption translation resumes at the first unfinished batch after 429", async () => {
+  const segments = Array.from({ length: 70 }, (_, start) => ({ start, text: "नमस्ते दुनिया" }));
   let completedSegments = [];
   let calls = 0;
   await assert.rejects(translateTranscriptToEnglish({
     ...options, segments, onProgress: async (progress) => { completedSegments = progress.segments; },
     fetchImpl: async (_url, init) => ++calls === 2
       ? { ok: false, status: 429, headers: { get: () => "60" } }
-      : translator(JSON.parse(init.body).input)
+      : captionTranslator(init)
   }), (error) => error.status === 429);
-  assert.equal(completedSegments.length, 1);
+  assert.equal(calls, 2);
+  assert.equal(completedSegments.length, 32);
   let resumedCalls = 0;
   const result = await translateTranscriptToEnglish({
     ...options, segments, completedSegments,
-    fetchImpl: async (_url, init) => { resumedCalls += 1; return translator(JSON.parse(init.body).input); }
+    fetchImpl: async (_url, init) => { resumedCalls += 1; return captionTranslator(init); }
   });
   assert.equal(resumedCalls, 2);
-  assert.equal(result.segments.length, 3);
+  assert.equal(result.segments.length, 70);
 });
 
 test("v0.5.0 completed captions resume with marker-free requests", async () => {
@@ -215,13 +229,141 @@ test("v0.5.0 completed captions resume with marker-free requests", async () => {
   const result = await translateTranscriptToEnglish({
     ...options, segments, completedSegments,
     fetchImpl: async (_url, init) => {
-      const { input } = JSON.parse(init.body);
-      inputs.push(input);
-      return translator(input);
+      inputs.push(...captionTexts(init).map((item) => item.text));
+      return captionTranslator(init);
     }
   });
   assert.deepEqual(inputs, ["दुनिया"]);
   assert.deepEqual(result.segments, [completedSegments[0], { start: 3.75, text: "world" }]);
+});
+
+test("batched captions keep literal code, math, links, tags and their order entirely local", async () => {
+  const segments = [
+    { start: 1.37, duration: 4.2, text: 'नमस्ते $x=1$ दुनिया `keep("नमस्ते")`' },
+    { start: 7.31, text: "दुनिया \\[y=2\\] नमस्ते https://example.test/path <b>दुनिया</b>" }
+  ];
+  const result = await translateTranscriptToEnglish({
+    ...options, segments,
+    fetchImpl: async (_url, init) => {
+      for (const { text } of captionTexts(init)) {
+        assert.ok(text === "नमस्ते" || text === "दुनिया");
+        assert.doesNotMatch(text, /ZXQWNLITERAL|WNSEG|keep|\$|https:|<b>/);
+      }
+      return captionTranslator(init);
+    }
+  });
+  assert.deepEqual(result.segments, [
+    { ...segments[0], text: 'Hello $x=1$ world `keep("नमस्ते")`' },
+    { ...segments[1], text: "world \\[y=2\\] Hello https://example.test/path <b>world</b>" }
+  ]);
+});
+
+test("provider response order cannot move translations to different timestamps", async () => {
+  const segments = [{ start: 3.25, text: "नमस्ते" }, { start: 12.5, text: "दुनिया" }];
+  const result = await translateTranscriptToEnglish({
+    ...options, segments,
+    fetchImpl: async (_url, init) => completion({
+      translations: captionTexts(init).map(({ id, text }) => ({ id, text: translateHindi(text) })).reverse()
+    })
+  });
+  assert.deepEqual(result.segments, [{ start: 3.25, text: "Hello" }, { start: 12.5, text: "world" }]);
+});
+
+test("caption batches are bounded by source characters as well as segment count", async () => {
+  const segments = Array.from({ length: 20 }, (_, start) => ({ start, text: "नमस्ते ".repeat(90) }));
+  let requests = 0;
+  const result = await translateTranscriptToEnglish({
+    ...options, segments,
+    fetchImpl: async (_url, init) => {
+      requests += 1;
+      const texts = captionTexts(init);
+      assert.ok(texts.length <= 32);
+      assert.ok(texts.reduce((sum, item) => sum + item.text.length, 0) <= 4000);
+      return captionTranslator(init);
+    }
+  });
+  assert.equal(requests, 4);
+  assert.deepEqual(result.segments, segments.map((segment) => ({ ...segment, text: translateHindi(segment.text) })));
+});
+
+test("fragmented captions cannot exceed the structured batch item budget", async () => {
+  const segments = Array.from({ length: 30 }, (_, start) => ({ start, text: "नमस्ते $x$ दुनिया $y$ नमस्ते" }));
+  let requests = 0;
+  const result = await translateTranscriptToEnglish({
+    ...options, segments,
+    fetchImpl: async (_url, init) => {
+      requests += 1;
+      assert.ok(captionTexts(init).length <= 64);
+      return captionTranslator(init);
+    }
+  });
+  assert.equal(requests, 2);
+  assert.deepEqual(result.segments, segments.map((segment) => ({ ...segment, text: translateHindi(segment.text) })));
+});
+
+test("unusually large captions retain bounded Translate requests instead of risking batch truncation", async () => {
+  const segments = [{ start: 2.71, text: "नमस्ते ".repeat(800) }];
+  let requests = 0;
+  const result = await translateTranscriptToEnglish({
+    ...options, segments,
+    fetchImpl: async (url, init) => {
+      requests += 1;
+      assert.ok(url.endsWith("/translate"));
+      const { input } = JSON.parse(init.body);
+      assert.ok(input.length <= 2000);
+      return translator(input);
+    }
+  });
+  assert.equal(requests, 3);
+  assert.deepEqual(result.segments, [{ start: 2.71, text: translateHindi(segments[0].text) }]);
+});
+
+test("literal-only captions do not consume a batch translation request", async () => {
+  const segments = [{ start: 4, text: '$x=1$ `print("नमस्ते")`' }, { start: 5, text: "123 + 456" }];
+  const result = await translateTranscriptToEnglish({
+    ...options, segments, fetchImpl: () => assert.fail("literal evidence must stay local")
+  });
+  assert.deepEqual(result.segments, segments);
+});
+
+for (const [name, translations] of [
+  ["missing", [{ id: 0, text: "Hello" }]],
+  ["duplicate", [{ id: 0, text: "Hello" }, { id: 0, text: "world" }]],
+  ["unknown", [{ id: 0, text: "Hello" }, { id: 2, text: "world" }]],
+  ["wrong type", [{ id: "0", text: "Hello" }, { id: 1, text: "world" }]],
+  ["empty", [{ id: 0, text: "Hello" }, { id: 1, text: " " }]],
+  ["untranslated", [{ id: 0, text: "Hello" }, { id: 1, text: "दुनिया" }]]
+]) {
+  test(`${name} batch results cannot be checkpointed as completed captions`, async () => {
+    let checkpoints = 0;
+    await assert.rejects(translateTranscriptToEnglish({
+      ...options, segments: [{ start: 1, text: "नमस्ते" }, { start: 2, text: "दुनिया" }],
+      onProgress: async () => { checkpoints += 1; },
+      fetchImpl: async () => completion({ translations })
+    }), /caption/);
+    assert.equal(checkpoints, 0);
+  });
+}
+
+test("a truncated batch response is rejected without saving partial captions", async () => {
+  await assert.rejects(translateTranscriptToEnglish({
+    ...options, segments: [{ start: 1, text: "नमस्ते" }],
+    onProgress: () => assert.fail("must not save partial output"),
+    fetchImpl: async () => response({ choices: [{ finish_reason: "length", message: { content: '{"translations":[]}' } }] })
+  }), /did not complete English caption translation/);
+});
+
+test("cancelling a caption batch aborts the request without checkpointing it", async () => {
+  const controller = new AbortController();
+  let requests = 0;
+  const pending = translateTranscriptToEnglish({
+    ...options, segments: [{ start: 1, text: "नमस्ते" }], signal: controller.signal,
+    onProgress: () => assert.fail("cancelled output must not be saved"),
+    fetchImpl: async () => { requests += 1; return new Promise(() => {}); }
+  });
+  controller.abort();
+  await assert.rejects(pending, { name: "AbortError" });
+  assert.equal(requests, 1);
 });
 
 test("legacy masked OCR checkpoints are not mistaken for new local-only parts", async () => {
